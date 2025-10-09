@@ -1,0 +1,132 @@
+═══════════════════════════════════════════════════════════════
+  COMO GERAR O EXECUTÁVEL - RPA CICLO
+═══════════════════════════════════════════════════════════════
+
+Você tem 3 opções para gerar o executável:
+
+──────────────────────────────────────────────────────────────
+OPÇÃO 1: build.bat (CORRIGIDO) ⭐ RECOMENDADO
+──────────────────────────────────────────────────────────────
+
+1. Duplo clique em: build.bat
+2. Aguarde o processo
+3. Executável estará em: dist\RPA_Ciclo.exe
+
+✓ Simples e rápido
+✓ Já corrigido para usar python -m PyInstaller
+
+──────────────────────────────────────────────────────────────
+OPÇÃO 2: build_alt.bat (ALTERNATIVO)
+──────────────────────────────────────────────────────────────
+
+1. Duplo clique em: build_alt.bat
+2. Aguarde o processo
+3. Pasta dist abrirá automaticamente
+
+✓ Mais robusto
+✓ Abre pasta automaticamente
+✓ Cria LEIA-ME.txt
+
+──────────────────────────────────────────────────────────────
+OPÇÃO 3: build_python.py (PYTHON PURO) ⭐ MAIS CONFIÁVEL
+──────────────────────────────────────────────────────────────
+
+1. Abra terminal na pasta rpa_ciclo
+2. Execute: python build_python.py
+3. Aguarde o processo
+4. Pasta dist abrirá automaticamente
+
+✓ Mais confiável
+✓ Melhor tratamento de erros
+✓ Mensagens mais claras
+✓ Verifica tudo antes de começar
+
+──────────────────────────────────────────────────────────────
+SOLUÇÃO DE PROBLEMAS
+──────────────────────────────────────────────────────────────
+
+Erro: "pyinstaller não é reconhecido"
+→ Use build_alt.bat ou build_python.py
+→ Eles usam: python -m PyInstaller
+
+Erro: "Python não encontrado"
+→ Instale Python 3.8 ou superior
+→ Certifique-se de que está no PATH
+
+Erro: "Arquivo não encontrado"
+→ Verifique se está na pasta rpa_ciclo
+→ Verifique se os arquivos existem:
+  - Logo.png
+  - Tecumseh.png
+  - Topo.png
+  - Logo.ico
+  - config.json
+  - CredenciaisOracle.json
+
+Erro durante build:
+→ Tente limpar manualmente:
+  - Delete pasta build
+  - Delete pasta dist
+  - Delete pasta __pycache__
+→ Tente novamente
+
+──────────────────────────────────────────────────────────────
+APÓS O BUILD
+──────────────────────────────────────────────────────────────
+
+✓ Executável estará em: dist\RPA_Ciclo.exe
+✓ Tamanho aproximado: 50-100 MB
+✓ Inclui todas as imagens e recursos
+
+🔒 SEGURANÇA:
+✓ CredenciaisOracle.json está DENTRO do executável
+✓ Dados sensíveis NÃO ficam visíveis
+✓ Cliente não terá acesso às credenciais
+✓ Apenas token.json será criado (gerado pelo usuário)
+
+PARA DISTRIBUIR:
+1. Copie APENAS o executável:
+   - RPA_Ciclo.exe
+2. OU copie a pasta dist com:
+   - RPA_Ciclo.exe
+   - LEIA-ME.txt
+
+❌ NÃO DISTRIBUA:
+   - CredenciaisOracle.json (já está embedded)
+   - token.json (será gerado pelo cliente)
+   - Arquivos de build
+   - Código fonte
+
+PARA TESTAR:
+1. Navegue até dist
+2. Duplo clique em RPA_Ciclo.exe
+3. Na primeira vez, faça login com Google
+4. Use normalmente
+
+──────────────────────────────────────────────────────────────
+RECOMENDAÇÃO
+──────────────────────────────────────────────────────────────
+
+🏆 MELHOR OPÇÃO: build_python.py
+
+Por quê?
+✓ Funciona em qualquer ambiente Python
+✓ Detecta erros antes de começar
+✓ Mensagens mais claras
+✓ Mais confiável
+
+Como usar:
+1. Abra terminal (cmd ou PowerShell)
+2. Navegue: cd C:\Users\ID135\OneDrive\Desktop\www\rpas\rpa_ciclo
+3. Execute: python build_python.py
+4. Aguarde
+5. Pronto!
+
+──────────────────────────────────────────────────────────────
+
+Qualquer problema, consulte:
+- MANUAL_USO.md
+- README.md
+
+Versão: 2.0
+Data: Outubro 2025

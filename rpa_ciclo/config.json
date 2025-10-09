@@ -1,0 +1,65 @@
+{
+  "coordenadas": {
+    "tela_01_transferencia_subinventario": {
+      "x": 744,
+      "y": 298,
+      "descricao": "Clique na opção Transferência de Subinventário"
+    },
+    "tela_02_campo_tipo": {
+      "x": 155,
+      "y": 217,
+      "descricao": "Clique no campo Tipo, digita 'SUB', TAB e ENTER",
+      "digitar": "SUB",
+      "acoes": ["tab", "enter"]
+    },
+    "tela_03_pastinha_funcionario": {
+      "x": 32,
+      "y": 120,
+      "descricao": "Clique na pastinha para selecionar funcionário"
+    },
+    "tela_04_selecionar_wallatas": {
+      "x": 577,
+      "y": 616,
+      "descricao": "Duplo clique em Wallatas Moreira",
+      "duplo_clique": true
+    },
+    "tela_05_confirmar_sim": {
+      "x": 765,
+      "y": 635,
+      "descricao": "Clique no botão Sim"
+    },
+    "tela_06_janela_navegador": {
+      "x": 345,
+      "y": 180,
+      "descricao": "Clique na janela de navegação após RPA_Oracle"
+    },
+    "tela_07_bancada_material": {
+      "x": 737,
+      "y": 351,
+      "descricao": "Duplo clique em '4. Bancada de Material'",
+      "duplo_clique": true
+    },
+    "tela_08_fechar_bancada": {
+      "x": 754,
+      "y": 97,
+      "descricao": "Clique no X para fechar a Bancada"
+    }
+  },
+  "textos": {
+    "funcionario_nome": "Wallatas Moreira",
+    "navegador_opcao": "1 - Navegador - TPC BR COMP BC2 INV USER",
+    "bancada_opcao": "4. Bancada de Material"
+  },
+  "tempos_espera": {
+    "entre_cliques": 1.5,
+    "apos_modal": 2.0,
+    "apos_rpa_oracle": 3.0,
+    "apos_rpa_bancada": 3.0,
+    "ciclo_completo": 1800,
+    "comentario": "ciclo_completo está em segundos (30 minutos = 1800s)"
+  },
+  "caminhos_rpa": {
+    "rpa_oracle": "../rpa_oracle/RPA_Oracle.py",
+    "rpa_bancada": "../rpa_bancada/main.py"
+  }
+}

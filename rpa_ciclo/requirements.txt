@@ -1,0 +1,26 @@
+# RPA Ciclo - Dependências Completas
+
+# =================== AUTOMAÇÃO ===================
+# Automação de interface gráfica
+pyautogui>=0.9.53
+
+# Controle de teclado e mouse
+keyboard>=0.13.5
+
+# Clipboard
+pyperclip>=1.8.2
+
+# =================== INTERFACE GRÁFICA ===================
+# Imagens e GUI
+Pillow>=9.0.0
+
+# =================== GOOGLE SHEETS ===================
+# Google APIs
+google-api-python-client>=2.0.0
+google-auth>=2.0.0
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.1.0
+
+# =================== BUILD (opcional) ===================
+# PyInstaller para gerar executável
+pyinstaller>=5.0.0

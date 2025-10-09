@@ -1,0 +1,25 @@
+RPA CICLO - EXECUTAVEL STANDALONE
+================================
+
+SEGURANCA:
+- CredenciaisOracle.json esta DENTRO do executavel
+- Dados sensiveis NAO ficam visiveis
+- Cliente nao tem acesso as credenciais
+- Apenas token.json sera criado (OK para cliente)
+
+Para executar:
+1. Execute RPA_Ciclo.exe
+2. Na primeira execucao, faca login com Google
+3. Escolha o modo de execucao:
+   - Ciclo Unico: Executa uma vez
+   - Modo Continuo: Repete a cada 30 min
+
+Arquivo gerado:
+- token.json (gerado apos primeiro login)
+
+Logs sao salvos em:
+- rpa_ciclo.log (arquivo local)
+- Google Sheets (aba "Ciclo Automacao")
+
+Desenvolvido para automacao Oracle
+Versao: 2.0
