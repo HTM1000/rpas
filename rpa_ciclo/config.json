@@ -1,9 +1,9 @@
 {
   "coordenadas": {
     "tela_01_transferencia_subinventario": {
-      "x": 744,
-      "y": 298,
-      "descricao": "Clique na opção Transferência de Subinventário"
+      "x": 771,
+      "y": 388,
+      "descricao": "Duplo clique na opção Transferência de Subinventário"
     },
     "tela_02_campo_tipo": {
       "x": 155,
@@ -34,8 +34,8 @@
       "descricao": "Clique na janela de navegação após RPA_Oracle"
     },
     "tela_07_bancada_material": {
-      "x": 737,
-      "y": 351,
+      "x": 784,
+      "y": 452,
       "descricao": "Duplo clique em '4. Bancada de Material'",
       "duplo_clique": true
     },
@@ -51,10 +51,10 @@
     "bancada_opcao": "4. Bancada de Material"
   },
   "tempos_espera": {
-    "entre_cliques": 1.5,
-    "apos_modal": 2.0,
-    "apos_rpa_oracle": 3.0,
-    "apos_rpa_bancada": 3.0,
+    "entre_cliques": 4.5,
+    "apos_modal": 5.0,
+    "apos_rpa_oracle": 6.0,
+    "apos_rpa_bancada": 6.0,
     "ciclo_completo": 1800,
     "comentario": "ciclo_completo está em segundos (30 minutos = 1800s)"
   },

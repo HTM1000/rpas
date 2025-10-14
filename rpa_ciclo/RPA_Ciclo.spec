@@ -20,6 +20,7 @@ added_files = [
     ('informacoes/tela-06-376x267.jpg', 'informacoes'),
     ('informacoes/tela-07-737x351-doubleclick.jpg', 'informacoes'),
     ('informacoes/tela-08-754x97.jpg', 'informacoes'),
+    ('informacoes/wallatas.png', 'informacoes'),
 ]
 
 # Importações ocultas que o PyInstaller pode não detectar automaticamente

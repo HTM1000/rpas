@@ -5,7 +5,7 @@ a = Analysis(
     ['RPA_Bancada_GUI_v2.py'],
     pathex=[],
     binaries=[],
-    datas=[('CredenciaisOracle.json', '.'), ('token.json', '.'), ('Tecumseh.png', '.'), ('Topo.png', '.'), ('Logo.png', '.')],
+    datas=[('Tecumseh.png', '.'), ('Topo.png', '.'), ('Logo.png', '.'), ('CredenciaisOracle.json', '.')],
     hiddenimports=['pyautogui', 'mouseinfo', 'PIL', 'googleapiclient', 'google.oauth2', 'google_auth_oauthlib', 'pandas', 'pyperclip', 'pygetwindow', 'tkinter', 'openpyxl', 'diagnostic_helper', 'google_sheets_manager'],
     hookspath=[],
     hooksconfig={},

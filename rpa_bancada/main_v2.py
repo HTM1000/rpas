@@ -334,13 +334,20 @@ def run_once():
     # 2) Clicar em "Localizar"
     gui_log("🖱️ [2/8] Clicando em 'Localizar'...")
     move_click(*COORD_LOCALIZAR)
-    time.sleep(SLEEP_ABERTURA)
-    
+
+    # DELAY AUMENTADO: Aguardar processamento do Oracle (pode levar até 3 minutos)
+    gui_log("⏳ Aguardando processamento do Localizar (até 3 minutos)...")
+    time.sleep(180)  # 3 minutos para garantir que o Oracle processou
+
     focus_oracle()
-    
+
     if not _rpa_running:
         return False
-    
+
+    # DELAY ADICIONAL: Garantir que a grid está completamente carregada
+    gui_log("⏳ Aguardando carregamento completo da grid...")
+    time.sleep(10)  # Delay extra para garantir que a grid carregou
+
     # 3) Clicar na célula Org
     gui_log("🖱️ [3/8] Clicando na célula Org...")
     move_click(*COORD_ORG_CELL)
@@ -366,32 +373,110 @@ def run_once():
         pag.press('down')
         time.sleep(0.25)
     pag.press('enter')
-    time.sleep(1.0)
-    
+
+    # DELAY AUMENTADO: Aguardar que os dados sejam copiados para o clipboard
+    gui_log("⏳ Aguardando cópia dos dados para o clipboard (30 segundos)...")
+    time.sleep(30)  # Delay maior para garantir que todos os dados foram copiados
+
     if not _rpa_running:
         return False
-    
-    # 7) MONITORAMENTO INTELIGENTE DO CLIPBOARD
-    gui_log("👀 [7/8] Monitorando clipboard (máx 20 minutos)...")
-    gui_log("⏳ Oracle está processando, isso pode demorar vários minutos...")
-    
-    # Usar o sistema de monitoramento inteligente
-    texto_final, sucesso = _diagnostic.monitor_clipboard_changes(
-        max_duration=ORACLE_MAX_WAIT,
-        check_interval=2
-    )
-    
+
+    # 7) MONITORAMENTO DO CLIPBOARD COM RETRY OTIMIZADO
+    gui_log("👀 [7/8] Verificando clipboard...")
+
+    texto_final = None
+    max_tentativas_retry = 3
+    tempo_espera_clipboard = 60  # Esperar 60 segundos para clipboard ter dados
+
+    for tentativa in range(max_tentativas_retry):
+        if tentativa == 0:
+            gui_log(f"⏳ Tentativa {tentativa + 1}/{max_tentativas_retry} - Aguardando dados no clipboard...")
+        else:
+            gui_log(f"🔄 Tentativa {tentativa + 1}/{max_tentativas_retry} de recuperação...")
+
+            # Clicar no botão cancelar (872, 667)
+            gui_log("🖱️ Clicando em 'Cancelar'...")
+            move_click(872, 667)
+            time.sleep(2)
+
+            # Clicar em (322, 307)
+            gui_log("🖱️ Clicando em posição (322, 307)...")
+            move_click(322, 307)
+            time.sleep(2)
+
+            # Repetir ação de copiar com botão direito
+            gui_log("🧹 Limpando clipboard...")
+            pyperclip.copy('')
+            time.sleep(0.5)
+
+            gui_log("🖱️ Clicando na célula Org novamente...")
+            move_click(*COORD_ORG_CELL)
+            time.sleep(0.5)
+
+            gui_log("⌨️ Abrindo menu de contexto...")
+            pag.hotkey('shift', 'f10')
+            time.sleep(1.5)
+
+            focus_oracle()
+
+            gui_log("⌨️ Selecionando 'Copiar Todas as Linhas'...")
+            for _ in range(3):
+                pag.press('down')
+                time.sleep(0.25)
+            pag.press('enter')
+
+            gui_log("⏳ Aguardando cópia dos dados...")
+            time.sleep(30)
+
+        # Aguardar tempo curto para verificar se clipboard tem dados
+        tempo_verificado = 0
+        intervalo_verificacao = 5  # Verificar a cada 5 segundos
+
+        while tempo_verificado < tempo_espera_clipboard and _rpa_running:
+            time.sleep(intervalo_verificacao)
+            tempo_verificado += intervalo_verificacao
+
+            texto_atual = pyperclip.paste()
+
+            if texto_atual and len(texto_atual.strip()) > 50:  # Clipboard com dados válidos
+                texto_final = texto_atual
+                gui_log(f"✅ Dados obtidos no clipboard ({len(texto_final):,} caracteres)")
+                break
+            else:
+                gui_log(f"⏳ Aguardando dados... ({tempo_verificado}/{tempo_espera_clipboard}s)")
+
+        # Verificar se obteve dados
+        if texto_final and len(texto_final.strip()) > 50:
+            gui_log(f"✅ Clipboard preenchido com sucesso na tentativa {tentativa + 1}")
+            break
+        else:
+            gui_log(f"❌ Tentativa {tentativa + 1} falhou - clipboard vazio ou com poucos dados")
+
+            if tentativa < max_tentativas_retry - 1:
+                gui_log("⏳ Preparando próxima tentativa...")
+            else:
+                gui_log(f"❌ ERRO: Todas as {max_tentativas_retry} tentativas falharam")
+                gui_log("🔄 Tentando monitoramento estendido como última opção...")
+
+                # Última tentativa: usar monitoramento longo (até 5 minutos)
+                texto_final, sucesso_longo = _diagnostic.monitor_clipboard_changes(
+                    max_duration=300,  # 5 minutos
+                    check_interval=5
+                )
+
+                if not texto_final or len(texto_final.strip()) < 50:
+                    gui_log("❌ Monitoramento estendido também falhou")
+                    _diagnostic.create_diagnostic_report()
+                    return False
+
     if not texto_final:
-        gui_log("❌ ERRO: Clipboard vazio após monitoramento")
+        gui_log("❌ ERRO: Clipboard vazio após todas as tentativas")
         _diagnostic.create_diagnostic_report()
         return False
-    
-    if not sucesso:
-        gui_log("⚠️ Timeout atingido, tentando processar dados parciais...")
-    
+
     # 8) PROCESSAR DADOS
     gui_log("🔄 [8/8] Processando dados extraídos...")
-    
+
     # Usar processamento robusto
     df = processar_clipboard_robusto(texto_final)
     

@@ -425,15 +425,6 @@ tk.Button(
 
 tk.Button(
     utils_frame,
-    text="☁️ Google Sheets",
-    command=abrir_google_sheets,
-    font=("Arial", 10),
-    padx=15,
-    pady=5
-).pack(side="left", padx=5)
-
-tk.Button(
-    utils_frame,
     text="❓ Ajuda",
     command=mostrar_ajuda,
     font=("Arial", 10),
