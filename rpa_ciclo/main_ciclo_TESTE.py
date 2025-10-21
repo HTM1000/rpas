@@ -117,9 +117,10 @@ base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 # ─── CONFIGURAÇÕES DE MODO ──────────────────────────────────────────────────
 # IMPORTANTE: Altere para True para testes, False para PRODUÇÃO
 MODO_TESTE = False  # True = simula movimentos sem pyautogui | False = PRODUÇÃO
-PARAR_QUANDO_VAZIO = False  # True = para quando vazio (teste) | False = continua rodando (PRODUÇÃO)
+PARAR_QUANDO_VAZIO = True  # Para quando vazio (TESTE)
 SIMULAR_FALHA_SHEETS = False  # True = força falhas para testar retry | False = PRODUÇÃO
 LIMITE_ITENS_TESTE = 50  # Limite de itens por ciclo no modo teste
+SEM_CTRL_S = True  # NAO executa Ctrl+S (TESTE)
 
 # Controle de execução
 _rpa_running = False
@@ -132,7 +133,7 @@ _dados_inseridos_oracle = False  # Rastreia se dados foram inseridos no Oracle n
 class CacheLocal:
     """Cache persistente para evitar duplicações no Oracle"""
 
-    def __init__(self, arquivo="processados.json"):
+    def __init__(self, arquivo="cache_teste_ciclo.json"):
         # Usar data_path (diretório do executável) igual ao RPA_Oracle
         data_path = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
         self.arquivo = os.path.join(data_path, arquivo)
@@ -313,13 +314,28 @@ def verificar_campo_ocr(x, y, largura, altura, valor_esperado, nome_campo="Campo
         # Capturar região da tela
         screenshot = ImageGrab.grab(bbox=(x, y, x + largura, y + altura))
 
-        # Salvar screenshot APENAS se solicitado (modo debug/teste)
-        if salvar_debug and MODO_TESTE:
-            screenshot_path = f"debug_ocr_{nome_campo.replace('.', '_')}.png"
+        # SEMPRE salvar screenshot em modo TESTE para debug
+        if True:  # Forçar salvamento para debug
+            screenshot_path = f"debug_ocr_{nome_campo.replace('.', '_').replace(' ', '_')}.png"
             screenshot.save(screenshot_path)
+            gui_log(f"[DEBUG] Screenshot salvo: {screenshot_path}")
 
-        # Aplicar OCR
-        texto_lido = pytesseract.image_to_string(screenshot, config='--psm 7').strip()
+        # Converter para escala de cinza e aumentar contraste
+        from PIL import ImageEnhance
+        screenshot = screenshot.convert('L')  # Escala de cinza
+        enhancer = ImageEnhance.Contrast(screenshot)
+        screenshot = enhancer.enhance(2.0)  # Aumentar contraste
+
+        # Salvar imagem processada também
+        if True:
+            processed_path = f"debug_ocr_{nome_campo.replace('.', '_').replace(' ', '_')}_processado.png"
+            screenshot.save(processed_path)
+
+        # Aplicar OCR com configurações otimizadas
+        # --psm 7: linha única de texto
+        # --oem 3: usar LSTM + tradicional
+        # -c tessedit_char_whitelist: apenas caracteres alfanuméricos
+        texto_lido = pytesseract.image_to_string(screenshot, config='--psm 7 --oem 3').strip()
 
         # Normalizar textos para comparação (remover espaços, converter para maiúsculas)
         texto_lido_norm = texto_lido.replace(" ", "").upper()
@@ -684,7 +700,7 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
 
         # Autenticar Google Sheets
         SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-        SPREADSHEET_ID = "14yUMc12iCQxqVzGTBvY6g9bIFfMhaQZ26ydJk_4ZeDk"  # PLANILHA PRODUÇÃO ORACLE
+        SPREADSHEET_ID = "147AN4Kn11T2qGyzTQgdqJ0QfSIt9TATEi0lw9zwMnpY"  # PLANILHA TESTE
         SHEET_NAME = "Separação"
 
         token_path = os.path.join(BASE_DIR, "token.json")
@@ -775,16 +791,14 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
                 if primeiro_ciclo and tentativas_verificacao >= MAX_TENTATIVAS_PRIMEIRO_CICLO:
                     gui_log(f"✅ Primeiro ciclo: Após {MAX_TENTATIVAS_PRIMEIRO_CICLO} tentativas sem itens, prosseguindo para Bancada")
 
-                    # ⚡ FORÇAR TAB PARA GARANTIR FLUXO ÚNICO DE FECHAMENTO
-                    # Quando não há dados para processar, forçamos um TAB para que
-                    # o Oracle entre no estado que exige confirmação ao fechar (modais)
-                    # Isso garante um fluxo único e consistente, sempre fechando com os modais
-                    gui_log("⌨️ Forçando TAB para garantir fluxo único de fechamento...")
+                    # ⚡ CLICAR NO BOTÃO PARA PREPARAR FECHAMENTO
+                    # Clicar no botão (330, 66) para preparar o Oracle para fechamento
+                    gui_log("🖱️ Clicando no botão de preparação (330, 66)...")
                     if not MODO_TESTE:
-                        pyautogui.press("tab")
-                        time.sleep(0.5)
+                        pyautogui.click(330, 66)
+                        time.sleep(1.0)
                     else:
-                        gui_log("[MODO TESTE] Simulando TAB")
+                        gui_log("[MODO TESTE] Simulando clique no botão")
 
                     # Retornar sucesso para continuar o fluxo (ir para Bancada)
                     tempo_espera = config["tempos_espera"]["apos_rpa_oracle"]
@@ -1047,11 +1061,24 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
                     # ✅ TODAS AS VALIDAÇÕES PASSARAM - EXECUTAR Ctrl+S
                     # ═══════════════════════════════════════════════════════════════
 
-                    # Salvar (Ctrl+S)
-                    gui_log("💾 [CTRL+S] Executando salvamento no Oracle...")
-                    pyautogui.hotkey("ctrl", "s")
-                    gui_log("⏳ Aguardando Oracle salvar...")
-                    time.sleep(3)  # Aguardar Oracle salvar antes de marcar como concluído
+                    # Salvar (Ctrl+S) - com flag de teste
+                    if globals().get('SEM_CTRL_S', False):
+                        gui_log("[TESTE] Ctrl+S SIMULADO (nao executado)")
+                        time.sleep(1)
+
+                        # No modo TESTE, limpar o formulário após processar
+                        gui_log("🧹 [TESTE] Limpando formulário...")
+                        # Coordenadas do botão Limpar (tela_06_limpar do config.json)
+                        if not MODO_TESTE:
+                            pyautogui.click(332, 66)  # Botão Limpar
+                            time.sleep(1.5)
+                        else:
+                            gui_log("[MODO TESTE] Simulando clique no botão Limpar")
+                    else:
+                        gui_log("💾 [CTRL+S] Executando salvamento no Oracle...")
+                        pyautogui.hotkey("ctrl", "s")
+                        gui_log("⏳ Aguardando Oracle salvar...")
+                        time.sleep(3)
 
                     gui_log("⏳ Inicio inserção no cache...")
 
@@ -1124,15 +1151,15 @@ def etapa_06_navegacao_pos_oracle(config):
     # Verificar se dados foram inseridos no Oracle
     if _dados_inseridos_oracle:
         gui_log("🧹 Dados foram inseridos - Limpando formulário primeiro...")
+
+        # 1. Limpar formulário (botão Limpar)
+        coord = config["coordenadas"]["tela_06_limpar"]
+        clicar_coordenada(coord["x"], coord["y"], descricao=coord["descricao"])
+
+        if not aguardar_com_pausa(tempo_espera, "Aguardando limpeza"):
+            return False
     else:
-        gui_log("ℹ️ Nenhum dado foi inserido - Fechando modais...")
-
-    # 1. Limpar formulário (botão Limpar)
-    coord = config["coordenadas"]["tela_06_limpar"]
-    clicar_coordenada(coord["x"], coord["y"], descricao=coord["descricao"])
-
-    if not aguardar_com_pausa(tempo_espera, "Aguardando limpeza"):
-       return False
+        gui_log("ℹ️ Nenhum dado foi inserido - Fechando modais diretamente...")
 
     # 2. Fechar janela "Subinventory Transfer (BC2)" - Botão X
     gui_log("🔴 Fechando 'Subinventory Transfer (BC2)'...")

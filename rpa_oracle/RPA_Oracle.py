@@ -7,6 +7,7 @@ import sys
 import csv
 import subprocess
 import json
+import random
 import tkinter as tk
 from tkinter import messagebox
 import pyautogui
@@ -27,8 +28,12 @@ base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 data_path = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
 
 # ─── CONFIGURAÇÕES ───────────────────────────────────────────────────────────
+MODO_TESTE = False  # True = simula Oracle sem pyautogui | False = PRODUÇÃO
+PARAR_QUANDO_VAZIO = False  # True = para quando vazio (teste) | False = continua rodando (PRODUÇÃO)
+SIMULAR_FALHA_SHEETS = False  # True = força falhas para testar retry | False = PRODUÇÃO
+
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-SPREADSHEET_ID = "14yUMc12iCQxqVzGTBvY6g9bIFfMhaQZ26ydJk_4ZeDk"
+SPREADSHEET_ID = "147AN4Kn11T2qGyzTQgdqJ0QfSIt9TATEi0lw9zwMnpY"  # PLANILHA MODO TESTE ORACLE
 SHEET_NAME = "Separação"
 
 # Intervalos
@@ -116,6 +121,11 @@ class CacheLocal:
 
     def adicionar(self, id_item, linha_atual, item, quantidade, referencia, status="pendente"):
         """Adiciona ao cache APÓS Ctrl+S (status pendente)"""
+        # VALIDAÇÃO: não permitir IDs vazios no cache
+        if not id_item or str(id_item).strip() == "":
+            log_interface(f"[ERRO CACHE] Tentativa de adicionar ID vazio ao cache! Linha: {linha_atual}, Item: {item}")
+            return False
+
         # Preparar dados antes do lock
         dados_item = {
             "linha_atual": linha_atual,
@@ -132,6 +142,7 @@ class CacheLocal:
 
         # Salvar sem lock para evitar deadlock
         self._salvar()
+        return True
 
     def marcar_concluido(self, id_item):
         """Remove do cache quando Sheets for atualizado com sucesso"""
@@ -157,6 +168,18 @@ class CacheLocal:
             ]
 
 # ─── HELPERS DE UI ───────────────────────────────────────────────────────────
+def indice_para_coluna(idx):
+    """Converte índice numérico (0-based) para letra de coluna do Google Sheets
+    0 -> A, 1 -> B, 25 -> Z, 26 -> AA, 27 -> AB, 28 -> AC, etc.
+    """
+    resultado = ""
+    idx += 1  # Google Sheets é 1-based
+    while idx > 0:
+        idx -= 1
+        resultado = chr(65 + (idx % 26)) + resultado
+        idx //= 26
+    return resultado
+
 def set_title_running(is_running: bool, extra: str = ""):
     base = "RPA Genesys"
     sufixo = " [Rodando]" if is_running else " [Parado]"
@@ -203,10 +226,15 @@ def buscar_linhas_novas(service):
     """
     Lê a planilha e retorna lista de tuplas (linha_index_na_planilha, dict_dos_campos)
     para linhas com Status Oracle vazio e Status contendo 'CONCLUÍDO'.
+
+    PROTEÇÃO ANTI-DUPLICAÇÃO:
+    - Só retorna linhas onde "Status Oracle" está VAZIO
+    - Se Status Oracle tiver qualquer valor (mesmo "PD"), não retorna
+    - Isso evita duplicação caso cache seja limpo manualmente
     """
     res = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID,
-        range=f"{SHEET_NAME}!A1:T"  # até T (Status Oracle)
+        range=f"{SHEET_NAME}!A1:AC"  # até AC (inclui coluna ID que está em AC)
     ).execute()
     valores = res.get("values", [])
     if not valores:
@@ -217,18 +245,60 @@ def buscar_linhas_novas(service):
     with sessao_lock:
         if not sessao["headers"]:
             sessao["headers"] = headers
+            # LOG DE DIAGNÓSTICO: Mostrar nomes das colunas na primeira vez
+            log_interface(f"[HEADERS] Colunas encontradas no Sheets: {headers}")
+
+            # Mostrar índice das colunas importantes
+            try:
+                idx_status_oracle = headers.index("Status Oracle")
+                # Converter índice para letra de coluna (0=A, 1=B, etc)
+                if idx_status_oracle < 26:
+                    letra_coluna = chr(65 + idx_status_oracle)
+                else:
+                    letra_coluna = chr(65 + idx_status_oracle // 26 - 1) + chr(65 + idx_status_oracle % 26)
+                log_interface(f"[HEADERS] 'Status Oracle' está no índice {idx_status_oracle} (Coluna {letra_coluna})")
+            except ValueError:
+                log_interface(f"[ERRO] Coluna 'Status Oracle' não encontrada!")
 
     linhas = []
+    linhas_analisadas = 0
+    linhas_com_status_oracle_vazio = 0
+    linhas_com_concluido = 0
+    linhas_aprovadas = 0
+
     # segurança contra linhas curtas
     for i, row in enumerate(dados):
+        linhas_analisadas += 1
         if len(row) < len(headers):
             row += [''] * (len(headers) - len(row))
         idx_status_oracle = headers.index("Status Oracle")
         idx_status = headers.index("Status")
         status_oracle = row[idx_status_oracle].strip()
         status = row[idx_status].strip().upper()
+
+        # LOG DE DIAGNÓSTICO
+        if linhas_analisadas <= 5:  # Mostrar apenas as primeiras 5 linhas
+            log_interface(f"[DEBUG BUSCA] Linha {i+2}: Status Oracle='{status_oracle}' | Status='{status}'")
+
+        # Contar condições
+        if status_oracle == "":
+            linhas_com_status_oracle_vazio += 1
+        if "CONCLUÍDO" in status:
+            linhas_com_concluido += 1
+
+        # DUPLA PROTEÇÃO:
+        # 1. Status Oracle deve estar completamente vazio
+        # 2. Status deve conter "CONCLUÍDO"
         if status_oracle == "" and "CONCLUÍDO" in status:
+            linhas_aprovadas += 1
             linhas.append((i + 2, dict(zip(headers, row))))  # +2 cabeçalho + 1-based
+
+    # LOG FINAL DA BUSCA
+    log_interface(f"[BUSCA SHEETS] Total analisadas: {linhas_analisadas}")
+    log_interface(f"[BUSCA SHEETS] Com Status Oracle vazio: {linhas_com_status_oracle_vazio}")
+    log_interface(f"[BUSCA SHEETS] Com CONCLUÍDO no Status: {linhas_com_concluido}")
+    log_interface(f"[BUSCA SHEETS] Aprovadas para processar: {linhas_aprovadas}")
+
     return linhas, headers, dados
 
 # ─── EXPORTAÇÃO (apenas sessão) ──────────────────────────────────────────────
@@ -349,7 +419,27 @@ def sleep_check_pause(segundos):
             break
         time.sleep(0.1)
 
-def verificar_erro_endereco(service, i, id_item):
+def atualizar_status_oracle(service, headers, linha, status_valor):
+    """Atualiza o Status Oracle dinamicamente baseado no índice da coluna"""
+    try:
+        idx_status_oracle = headers.index("Status Oracle")
+        coluna_letra = indice_para_coluna(idx_status_oracle)
+        range_str = f"{SHEET_NAME}!{coluna_letra}{linha}"
+
+        log_interface(f"[SHEETS] Atualizando linha {linha}, coluna {coluna_letra} (índice {idx_status_oracle}) com '{status_valor}'")
+
+        service.spreadsheets().values().update(
+            spreadsheetId=SPREADSHEET_ID,
+            range=range_str,
+            valueInputOption="RAW",
+            body={"values": [[status_valor]]}
+        ).execute()
+        return True
+    except Exception as e:
+        log_interface(f"[ERRO] Falha ao atualizar Status Oracle: {e}")
+        return False
+
+def verificar_erro_endereco(service, headers, i, id_item):
     """Verifica se o modal de erro de endereço apareceu na tela"""
     erro_endereco_path = os.path.join(base_path, "erroendereco.png")
     if os.path.isfile(erro_endereco_path):
@@ -358,16 +448,8 @@ def verificar_erro_endereco(service, i, id_item):
         except (PyautoguiImageNotFoundException, PyscreezeImageNotFoundException):
             encontrado = None
         if encontrado:
-            try:
-                service.spreadsheets().values().update(
-                    spreadsheetId=SPREADSHEET_ID,
-                    range=f"{SHEET_NAME}!T{i}",
-                    valueInputOption="RAW",
-                    body={"values": [["PD"]]}
-                ).execute()
-                log_interface(f"[ERRO] Linha {i} marcada como 'PD' (pendente) por erro de endereço detectado.")
-            except Exception as err_up:
-                log_interface(f"Erro ao marcar linha {i} como PD: {err_up}")
+            atualizar_status_oracle(service, headers, i, "PD")
+            log_interface(f"[ERRO] Linha {i} marcada como 'PD' (pendente) por erro de endereço detectado.")
 
             estado["executando"] = False
             set_title_running(False, " [Erro Endereço]")
@@ -389,6 +471,7 @@ def tratar_erro_oracle():
 
 def sync_sheets_background(cache, service):
     """Thread que tenta atualizar Sheets para linhas pendentes (busca dinâmica)"""
+    ciclo_retry = 0
     while True:
         time.sleep(30)  # Retry a cada 30 segundos
 
@@ -396,25 +479,34 @@ def sync_sheets_background(cache, service):
             continue
 
         try:
+            ciclo_retry += 1
             pendentes = cache.get_pendentes()
+
             if not pendentes:
                 continue
 
-            # Buscar todas as linhas do Sheets
+            log_interface(f"[RETRY THREAD] Ciclo {ciclo_retry} - Encontrados {len(pendentes)} itens pendentes para atualizar")
+
+            # Buscar todas as linhas do Sheets (até AC para incluir coluna ID)
             res = service.spreadsheets().values().get(
                 spreadsheetId=SPREADSHEET_ID,
-                range=f"{SHEET_NAME}!A1:T"
+                range=f"{SHEET_NAME}!A1:AC"
             ).execute()
 
             valores = res.get("values", [])
             if not valores:
+                log_interface(f"[RETRY THREAD] Nenhum valor retornado do Sheets")
                 continue
 
             headers, dados = valores[0], valores[1:]
             idx_id = headers.index("ID")
             idx_status_oracle = headers.index("Status Oracle")
+            log_interface(f"[RETRY THREAD] Sheets carregado - {len(dados)} linhas encontradas")
 
             # Tentar atualizar cada pendente
+            sucesso_count = 0
+            falha_count = 0
+
             for id_item in pendentes:
                 # Buscar linha atual pelo ID
                 linha_atual = None
@@ -427,30 +519,42 @@ def sync_sheets_background(cache, service):
                 if linha_atual is None:
                     # Linha foi deletada, remove do cache
                     if cache.marcar_concluido(id_item):
-                        log_interface(f"[CACHE] Linha ID {id_item} deletada no Sheets, removida do cache")
+                        log_interface(f"[RETRY THREAD] Linha ID {id_item} deletada no Sheets, removida do cache")
                     continue
 
-                # Tentar atualizar Sheets
+                # Tentar atualizar Sheets usando detecção dinâmica
                 try:
+                    coluna_letra = indice_para_coluna(idx_status_oracle)
+                    range_str = f"{SHEET_NAME}!{coluna_letra}{linha_atual}"
+
                     service.spreadsheets().values().update(
                         spreadsheetId=SPREADSHEET_ID,
-                        range=f"{SHEET_NAME}!T{linha_atual}",
+                        range=range_str,
                         valueInputOption="RAW",
                         body={"values": [["Processo Oracle Concluído"]]}
                     ).execute()
 
                     if cache.marcar_concluido(id_item):
-                        log_interface(f"[RETRY] ID {id_item} - Sheets atualizado com sucesso (retry), removido do cache")
+                        log_interface(f"[RETRY THREAD] ✓ ID {id_item} - Sheets atualizado com sucesso na coluna {coluna_letra} (linha {linha_atual}), removido do cache")
+                        sucesso_count += 1
                 except Exception as e:
                     # Falhou, tentará novamente em 30s
-                    pass
+                    log_interface(f"[RETRY THREAD] ✗ ID {id_item} - Falha ao atualizar: {str(e)[:100]}")
+                    falha_count += 1
 
-        except Exception:
-            pass
+            if sucesso_count > 0 or falha_count > 0:
+                log_interface(f"[RETRY THREAD] Ciclo {ciclo_retry} finalizado - Sucesso: {sucesso_count}, Falhas: {falha_count}")
+
+        except Exception as e:
+            log_interface(f"[RETRY THREAD] Erro crítico no ciclo {ciclo_retry}: {str(e)[:150]}")
+            log_interface(f"[RETRY THREAD] Detalhes: {traceback.format_exc()[:300]}")
 
 def robo_loop():
     estado["executando"] = True
     log_interface("="*60)
+    if MODO_TESTE:
+        log_interface("[MODO TESTE ATIVADO] Simulação sem Oracle - apenas teste de lógica e Sheets")
+        log_interface("="*60)
     log_interface("[INICIO] Iniciando loop do robo...")
 
     try:
@@ -498,21 +602,45 @@ def robo_loop():
 
             # 3) Se ainda não houver, manter Oracle acordado e aguardar
             if not linhas:
-                try:
-                    pyautogui.press("shift")
-                    log_interface("[KEEPALIVE] Pressionando shift para manter Oracle ativo")
-                except Exception as e:
-                    log_interface(f"[AVISO] Erro ao pressionar shift: {e}")
+                # Modo teste: para automaticamente quando não houver linhas
+                if PARAR_QUANDO_VAZIO and MODO_TESTE:
+                    log_interface("[MODO TESTE] Nenhuma linha para processar. Encerrando automaticamente...")
+                    log_interface("[CONCLUÍDO] Todas as linhas foram processadas!")
+                    estado["executando"] = False
+                    set_title_running(False, " [TESTE CONCLUÍDO]")
+                    restaurar_app()
+                    messagebox.showinfo("Teste Concluído", "Todas as linhas foram processadas com sucesso!\n\nO robô foi parado automaticamente.")
+                    break
+
+                if not MODO_TESTE:
+                    try:
+                        pyautogui.press("shift")
+                        log_interface("[KEEPALIVE] Pressionando shift para manter Oracle ativo")
+                    except Exception as e:
+                        log_interface(f"[AVISO] Erro ao pressionar shift: {e}")
+                else:
+                    log_interface("[MODO TESTE] Pulando keepalive (shift)")
                 log_interface(f"[AGUARDANDO] Nenhuma linha nova. Aguardando {IDLE_KEEPALIVE_SECONDS}s...")
                 sleep_check_pause(IDLE_KEEPALIVE_SECONDS)
                 continue
 
             # 4) Processar
             log_interface(f"[PROCESSAMENTO] Iniciando processamento de {len(linhas)} linhas...")
+            linhas_puladas = 0
+            linhas_processadas = 0
+            total_linhas = len(linhas)
+
             for idx, (i, linha) in enumerate(linhas, 1):
                 if not estado["executando"]:
-                    log_interface(f"[STOP] Processamento interrompido na linha {idx}/{len(linhas)}")
+                    log_interface(f"[STOP] Processamento interrompido na linha {idx}/{total_linhas}")
                     break
+
+                # Atualizar título com progresso
+                try:
+                    progresso = f" - {idx}/{total_linhas} linhas"
+                    set_title_running(True, (" [MODO TESTE]" if MODO_TESTE else "") + progresso)
+                except Exception:
+                    pass
 
                 sucesso = False
                 try:
@@ -526,19 +654,74 @@ def robo_loop():
                     quantidade  = linha.get("Quantidade", "")
                     referencia  = linha.get("Cód Referencia", "")
 
-                    # VERIFICAR CACHE ANTI-DUPLICACAO
-                    if cache.ja_processado(id_item):
-                        log_interface(f"[CACHE] Linha {i} ({idx}/{len(linhas)}) - ID {id_item} ja processado. Pulando.")
+                    # VALIDAR ID (não pode estar vazio)
+                    if not id_item or id_item == "":
+                        log_interface(f"[AVISO] Linha {i} ({idx}/{len(linhas)}) - ID vazio ou invalido. Pulando.")
+                        log_interface(f"[DEBUG] Dados da linha: {linha}")
                         continue
 
-                    # validar quantidade
+                    # VERIFICAR CACHE ANTI-DUPLICACAO
+                    if cache.ja_processado(id_item):
+                        linhas_puladas += 1
+                        log_interface(f"[CACHE] Linha {i} ({idx}/{len(linhas)}) - ID '{id_item}' ja processado. Pulando para proximo...")
+                        continue
+
+                    # ═══════════════════════════════════════════════════════════════
+                    # REGRAS DE VALIDAÇÃO (regras-rpa-oracle.txt)
+                    # ═══════════════════════════════════════════════════════════════
+
+                    # REGRA 1: Quantidade Zero
                     try:
                         qtd_float = float(str(quantidade).replace(",", ".").replace(" ", ""))
-                        if qtd_float <= 0:
-                            log_interface(f"[AVISO] Linha {i} ({idx}/{len(linhas)}) - Quantidade invalida ou negativa: {quantidade}. Pulando.")
+                        if qtd_float == 0:
+                            atualizar_status_oracle(service, headers, i, "Quantidade Zero")
+                            log_interface(f"[REGRA 1] Linha {i} - Quantidade Zero detectada. Marcada como 'Quantidade Zero'. Pulando.")
+                            continue
+                        elif qtd_float < 0:
+                            log_interface(f"[AVISO] Linha {i} ({idx}/{len(linhas)}) - Quantidade negativa: {quantidade}. Pulando.")
                             continue
                     except ValueError:
                         log_interface(f"[AVISO] Linha {i} ({idx}/{len(linhas)}) - Quantidade nao e numero valido: {quantidade}. Pulando.")
+                        continue
+
+                    # REGRA 3: Campos vazios
+                    campos_obrigatorios = {
+                        "ITEM": item,
+                        "SUB. ORIGEM": sub_o,
+                        "END. ORIGEM": end_o,
+                        "SUB. DESTINO": sub_d,
+                        "END. DESTINO": end_d
+                    }
+                    # Apenas verifica destino se não for COD
+                    if str(referencia).strip().upper().startswith("COD"):
+                        # Para COD, não precisa verificar destino
+                        campos_obrigatorios = {
+                            "ITEM": item,
+                            "SUB. ORIGEM": sub_o,
+                            "END. ORIGEM": end_o
+                        }
+
+                    campos_vazios = [nome for nome, valor in campos_obrigatorios.items() if not valor or str(valor).strip() == ""]
+                    if campos_vazios:
+                        atualizar_status_oracle(service, headers, i, "Campo vazio encontrado")
+                        log_interface(f"[REGRA 3] Linha {i} - Campos vazios: {', '.join(campos_vazios)}. Marcada como 'Campo vazio encontrado'. Pulando.")
+                        continue
+
+                    # REGRA 2 e 4: Transações não autorizadas
+                    subinvs_restritos = ["RAWINDIR", "RAWMANUT", "RAWWAFIFE"]
+                    sub_o_upper = str(sub_o).strip().upper()
+                    sub_d_upper = str(sub_d).strip().upper()
+
+                    # REGRA 2: RAWINDIR/RAWMANUT/RAWWAFIFE -> RAWCENTR não autorizado
+                    if sub_o_upper in subinvs_restritos and sub_d_upper == "RAWCENTR":
+                        atualizar_status_oracle(service, headers, i, "Transação não autorizada")
+                        log_interface(f"[REGRA 2] Linha {i} - Transação {sub_o} -> {sub_d} não autorizada. Marcada como 'Transação não autorizada'. Pulando.")
+                        continue
+
+                    # REGRA 4: RAWINDIR/RAWMANUT/RAWWAFIFE para eles mesmos não autorizado
+                    if sub_o_upper in subinvs_restritos and sub_o_upper == sub_d_upper:
+                        atualizar_status_oracle(service, headers, i, "Transação não autorizada")
+                        log_interface(f"[REGRA 4] Linha {i} - Transação {sub_o} -> {sub_d} (mesmo subinv) não autorizada. Marcada como 'Transação não autorizada'. Pulando.")
                         continue
 
                     log_interface(
@@ -546,111 +729,137 @@ def robo_loop():
                         f"Origem={sub_o}/{end_o} | Destino={sub_d}/{end_d} | Ref={referencia}"
                     )
 
-                    # preenchimentos no Oracle
-                    pyautogui.click(coords["item"])
-                    pyautogui.press("delete")
-                    pyautogui.write(item)
-                    pyautogui.press("tab")
-                    sleep_check_pause(1)
-                    if not estado["executando"]:
-                        break
+                    if MODO_TESTE:
+                        log_interface(f"[MODO TESTE] Simulando preenchimento no Oracle (sem pyautogui)...")
+                        time.sleep(1)  # Simula o tempo de preenchimento
+                    else:
+                        # Verificar posição do mouse antes de começar
+                        pos_inicial = pyautogui.position()
+                        log_interface(f"[DEBUG] Posicao inicial do mouse: {pos_inicial}")
 
-                    # erro de produto?
-                    erro_produto_path = os.path.join(base_path, "ErroProduto.png")
-                    if os.path.isfile(erro_produto_path):
-                        try:
-                            encontrado = pyautogui.locateOnScreen(erro_produto_path, confidence=0.8)
-                        except (PyautoguiImageNotFoundException, PyscreezeImageNotFoundException):
-                            encontrado = None
-                        if encontrado:
+                        # preenchimentos no Oracle
+                        log_interface(f"[ORACLE] Clicando no campo Item em {coords['item']}")
+                        pyautogui.click(coords["item"])
+                        time.sleep(0.3)
+                        log_interface(f"[ORACLE] Limpando campo Item")
+                        pyautogui.press("delete")
+                        time.sleep(0.2)
+                        log_interface(f"[ORACLE] Digitando Item: '{item}'")
+                        pyautogui.write(item)
+                        time.sleep(0.2)
+                        log_interface(f"[ORACLE] Pressionando Tab")
+                        pyautogui.press("tab")
+                        sleep_check_pause(1)
+                        if not estado["executando"]:
+                            break
+
+                    if MODO_TESTE:
+                        # No modo teste, pula verificações de tela
+                        log_interface(f"[MODO TESTE] Pulando verificações de erro de produto...")
+                    else:
+                        # erro de produto?
+                        erro_produto_path = os.path.join(base_path, "ErroProduto.png")
+                        if os.path.isfile(erro_produto_path):
                             try:
-                                service.spreadsheets().values().update(
-                                    spreadsheetId=SPREADSHEET_ID,
-                                    range=f"{SHEET_NAME}!T{i}",
-                                    valueInputOption="RAW",
-                                    body={"values": [["PD"]]}
-                                ).execute()
+                                encontrado = pyautogui.locateOnScreen(erro_produto_path, confidence=0.8)
+                            except (PyautoguiImageNotFoundException, PyscreezeImageNotFoundException):
+                                encontrado = None
+                            if encontrado:
+                                atualizar_status_oracle(service, headers, i, "PD")
                                 log_interface(f"[ERRO] Linha {i} marcada como 'PD' (pendente) por erro detectado.")
-                            except Exception as err_up:
-                                log_interface(f"Erro ao marcar linha {i} como PD: {err_up}")
 
-                            estado["executando"] = False
-                            set_title_running(False, " [Erro Produto]")
-                            restaurar_app()
-                            messagebox.showerror("Erro de Produto", "Erro de produto detectado. Robo parado!")
+                                estado["executando"] = False
+                                set_title_running(False, " [Erro Produto]")
+                                restaurar_app()
+                                messagebox.showerror("Erro de Produto", "Erro de produto detectado. Robo parado!")
+                                return  # Para completamente o robô
+
+                    if MODO_TESTE:
+                        log_interface(f"[MODO TESTE] Simulando preenchimento de Referencia, Sub/End Origem...")
+                        time.sleep(0.5)
+                    else:
+                        # *** NOVA LÓGICA PARA REFERÊNCIA COMEÇANDO COM "COD" OU NÃO ***
+                        pyautogui.click(coords["Referencia"])
+                        pyautogui.write(referencia)
+                        pyautogui.press("tab")
+                        sleep_check_pause(1)
+
+                        pyautogui.click(coords["sub_origem"])
+                        time.sleep(0.2)
+                        pyautogui.write(sub_o)
+                        pyautogui.press("tab")
+                        sleep_check_pause(1)
+
+                        pyautogui.press("delete")
+                        pyautogui.click(coords["end_origem"])
+                        time.sleep(0.2)
+                        pyautogui.write(end_o)
+                        pyautogui.press("tab")
+                        sleep_check_pause(1)
+
+                        # Verificar erro de endereço após preencher endereço origem
+                        if verificar_erro_endereco(service, headers, i, id_item):
                             return  # Para completamente o robô
-
-                    # *** NOVA LÓGICA PARA REFERÊNCIA COMEÇANDO COM “COD” OU NÃO ***
-                    pyautogui.click(coords["Referencia"])
-                    pyautogui.write(referencia)
-                    sleep_check_pause(1)
-                    time.sleep(0.2)
-
-                    pyautogui.click(coords["sub_origem"])
-                    time.sleep(0.2)
-                    pyautogui.write(sub_o)
-                    pyautogui.press("tab")
-                    sleep_check_pause(1)
-
-                    pyautogui.press("delete")
-                    pyautogui.click(coords["end_origem"])
-                    time.sleep(0.2)
-                    pyautogui.write(end_o)
-                    pyautogui.press("tab")
-                    sleep_check_pause(1)
-
-                    # Verificar erro de endereço após preencher endereço origem
-                    if verificar_erro_endereco(service, i, id_item):
-                        return  # Para completamente o robô
 
                     # Verifica se referencia inicia com "COD"
                     if str(referencia).strip().upper().startswith("COD"):
                         log_interface(f"[COD] Referencia '{referencia}' detectada como tipo COD. Pulando campos destino.")
-                        pyautogui.press("tab"); sleep_check_pause(1)  # pular sub_destino
-                        pyautogui.press("tab"); sleep_check_pause(1)  # pular end_destino
+                        if not MODO_TESTE:
+                            pyautogui.press("tab"); sleep_check_pause(1)  # pular sub_destino
+                            pyautogui.press("tab"); sleep_check_pause(1)  # pular end_destino
                     else:
                         log_interface(f"[MOV] Referencia '{referencia}' tratada como MOV. Preenchendo normalmente.")
-                        log_interface(f"[MOV] Preenchendo Sub.Destino: {sub_d}")
+                        if MODO_TESTE:
+                            log_interface(f"[MODO TESTE] Simulando preenchimento de Sub/End Destino...")
+                            time.sleep(0.5)
+                        else:
+                            log_interface(f"[MOV] Preenchendo Sub.Destino: {sub_d}")
+                            pyautogui.press("delete")
+                            pyautogui.click(coords["sub_destino"])
+                            time.sleep(0.2)
+                            pyautogui.write(sub_d)
+                            pyautogui.press("tab")
+                            sleep_check_pause(1)
+                            log_interface(f"[MOV] Sub.Destino preenchido, verificando pausa...")
+                            if not estado["executando"]:
+                                log_interface(f"[MOV] Estado executando virou False, parando...")
+                                break
+
+                            log_interface(f"[MOV] Preenchendo End.Destino: {end_d}")
+                            pyautogui.press("delete")
+                            pyautogui.click(coords["end_destino"])
+                            time.sleep(0.2)
+                            pyautogui.write(end_d)
+                            pyautogui.press("tab")
+                            sleep_check_pause(1)
+                            log_interface(f"[MOV] End.Destino preenchido")
+
+                            # Verificar erro de endereço após preencher endereço destino
+                            if verificar_erro_endereco(service, headers, i, id_item):
+                                return  # Para completamente o robô
+
+                    if MODO_TESTE:
+                        log_interface(f"[MODO TESTE] Simulando preenchimento de quantidade e Ctrl+S...")
+                        time.sleep(0.5)
+                    else:
+                        log_interface(f"[QUANTIDADE] Preenchendo quantidade: {quantidade}")
                         pyautogui.press("delete")
-                        pyautogui.click(coords["sub_destino"])
+                        pyautogui.click(coords["quantidade"])
                         time.sleep(0.2)
-                        pyautogui.write(sub_d)
-                        pyautogui.press("tab")
+                        pyautogui.write(quantidade)
                         sleep_check_pause(1)
-                        log_interface(f"[MOV] Sub.Destino preenchido, verificando pausa...")
-                        if not estado["executando"]:
-                            log_interface(f"[MOV] Estado executando virou False, parando...")
-                            break
+                        log_interface(f"[QUANTIDADE] Quantidade preenchida")
 
-                        log_interface(f"[MOV] Preenchendo End.Destino: {end_d}")
-                        pyautogui.press("delete")
-                        pyautogui.click(coords["end_destino"])
-                        time.sleep(0.2)
-                        pyautogui.write(end_d)
-                        pyautogui.press("tab")
+                        log_interface(f"[SAVE] Salvando com Ctrl+S...")
+                        pyautogui.hotkey("ctrl", "s")
                         sleep_check_pause(1)
-                        log_interface(f"[MOV] End.Destino preenchido")
+                        time.sleep(0.5)
+                        log_interface(f"[SAVE] Ctrl+S executado, tratando possíveis erros...")
 
-                        # Verificar erro de endereço após preencher endereço destino
-                        if verificar_erro_endereco(service, i, id_item):
-                            return  # Para completamente o robô
+                        tratar_erro_oracle()
 
-                    log_interface(f"[QUANTIDADE] Preenchendo quantidade: {quantidade}")
-                    pyautogui.press("delete")
-                    pyautogui.click(coords["quantidade"])
-                    time.sleep(0.2)
-                    pyautogui.write(quantidade)
-                    sleep_check_pause(1)
-                    log_interface(f"[QUANTIDADE] Quantidade preenchida")
-
-                    log_interface(f"[SAVE] Salvando com Ctrl+S...")
-                    pyautogui.hotkey("ctrl", "s")
-                    sleep_check_pause(1)
-                    time.sleep(0.5)
-                    log_interface(f"[SAVE] Ctrl+S executado, tratando possíveis erros...")
-
-                    tratar_erro_oracle()
                     sucesso = True
+                    linhas_processadas += 1
                     log_interface(f"[SUCESSO] Processamento no Oracle concluído para ID {id_item}")
 
                     # GRAVAR NO CACHE (APOS Ctrl+S, ANTES de tentar Sheets)
@@ -668,28 +877,43 @@ def robo_loop():
                     except Exception as e_cache:
                         log_interface(f"[AVISO] Erro ao adicionar ao cache: {e_cache}")
 
-                except Exception:
-                    log_interface(traceback.format_exc())
+                except Exception as e_proc:
+                    log_interface(f"[ERRO] Erro no processamento da linha {i} (ID {id_item}): {str(e_proc)[:150]}")
+                    log_interface(f"[ERRO] Traceback: {traceback.format_exc()[:500]}")
+                    # IMPORTANTE: Não para o loop, apenas registra o erro e continua
+                    log_interface(f"[AVISO] Pulando linha {i} devido ao erro. Continuando com a próxima...")
+                    sleep_check_pause(2)  # Pausa breve antes de continuar
 
                 if sucesso:
-                    # Atualiza Sheets - usando o indice correto (i ja e a linha correta)
+                    # Atualiza Sheets - usando detecção dinâmica da coluna Status Oracle
                     try:
-                        log_interface(f"[SHEETS] Tentando atualizar Sheets linha {i} coluna T (ID {id_item})...")
+                        # SIMULAÇÃO DE FALHA (modo teste)
+                        if SIMULAR_FALHA_SHEETS and random.random() < 0.5:
+                            raise Exception("FALHA SIMULADA - Testando retry automático")
+
+                        idx_status_oracle = headers.index("Status Oracle")
+                        coluna_letra = indice_para_coluna(idx_status_oracle)
+                        range_str = f"{SHEET_NAME}!{coluna_letra}{i}"
+
+                        log_interface(f"[SHEETS] Tentando atualizar linha {i}, coluna {coluna_letra} (índice {idx_status_oracle}) - ID {id_item}")
+
                         service.spreadsheets().values().update(
                             spreadsheetId=SPREADSHEET_ID,
-                            range=f"{SHEET_NAME}!T{i}",
+                            range=range_str,
                             valueInputOption="RAW",
                             body={"values": [["Processo Oracle Concluído"]]}
                         ).execute()
 
                         # Remove do cache ao concluir
                         if cache.marcar_concluido(id_item):
-                            log_interface(f"[SHEETS] ID {id_item} - Sheets atualizado com sucesso, removido do cache")
+                            log_interface(f"[SHEETS] ✓ ID {id_item} - Sheets atualizado com sucesso na coluna {coluna_letra}, removido do cache")
+                        else:
+                            log_interface(f"[AVISO] ID {id_item} não estava no cache para remover")
 
                     except Exception as err_up:
-                        log_interface(f"[ERRO] ID {id_item} - Falha ao atualizar Sheets linha {i}: {err_up}. Retry em background...")
-                        import traceback
-                        log_interface(f"[ERRO] Detalhes do erro: {traceback.format_exc()}")
+                        log_interface(f"[ERRO SHEETS] ID {id_item} - Falha ao atualizar linha {i}: {str(err_up)[:150]}")
+                        log_interface(f"[RETRY] ID {id_item} permanece no cache. Thread de retry tentará atualizar em 30s...")
+                        # NÃO IMPRIME O TRACEBACK COMPLETO PARA NÃO POLUIR O LOG
 
                     # Guarda linha desta sessão (com Status Oracle definido)
                     try:
@@ -706,7 +930,20 @@ def robo_loop():
 
                     sleep_check_pause(1)
 
-            # 5) Pausa curta antes do próximo ciclo
+                    # Log de progresso a cada 100 linhas
+                    if idx % 100 == 0:
+                        log_interface(f"[PROGRESSO] {idx}/{total_linhas} linhas processadas ({(idx/total_linhas*100):.1f}%)")
+                    elif idx % 10 == 0:
+                        # Log mais simples a cada 10 linhas (apenas no console interno)
+                        pass  # Removido para não poluir
+
+                    log_interface(f"[PROCESSAMENTO] Linha {i} (ID {id_item}) concluída. Continuando para próxima linha...")
+
+            # 5) Log do resumo do processamento
+            log_interface(f"[RESUMO] Ciclo finalizado: {linhas_processadas} linhas processadas, {linhas_puladas} linhas puladas (cache)")
+            log_interface(f"[CONTINUAÇÃO] Loop continuará no próximo ciclo...")
+
+            # 6) Pausa curta antes do próximo ciclo
             log_interface(f"[CICLO {ciclo}] Ciclo concluido. Aguardando {QUICK_RECHECK_SECONDS}s ate proximo ciclo...")
             sleep_check_pause(QUICK_RECHECK_SECONDS)
 
@@ -737,12 +974,34 @@ def monitorar_tecla():
         time.sleep(0.1)
 
 def iniciar_robo():
-    if not messagebox.askyesno("Confirmação", "Oracle está pronto? Deseja iniciar?"):
+    mensagem_confirmacao = "MODO TESTE ATIVADO!\n\nNão irá preencher no Oracle, apenas testará a lógica.\nDeseja iniciar?" if MODO_TESTE else "Oracle está pronto? Deseja iniciar?"
+    if not messagebox.askyesno("Confirmação", mensagem_confirmacao):
         return
-    app.iconify()  # minimiza a janela
-    status_label.config(text="Status: Rodando")
-    set_title_running(True)
+
+    if not MODO_TESTE:
+        # TESTE DO PYAUTOGUI ANTES DE MINIMIZAR (só no modo real)
+        try:
+            pos = pyautogui.position()
+            log_interface(f"[DEBUG] PyAutoGUI OK - Posição do mouse: {pos}")
+            log_interface(f"[DEBUG] Tamanho da tela: {pyautogui.size()}")
+            log_interface(f"[DEBUG] Failsafe: {pyautogui.FAILSAFE}")
+            log_interface(f"[DEBUG] Coordenadas configuradas: {coords}")
+        except Exception as e:
+            log_interface(f"[ERRO] PyAutoGUI não está funcionando: {e}")
+            messagebox.showerror("Erro", f"PyAutoGUI não está funcionando:\n{e}")
+            return
+
+        # Dar tempo para o usuário ver os logs antes de minimizar
+        log_interface("[INFO] Minimizando janela em 2 segundos...")
+        time.sleep(2)
+        app.iconify()  # minimiza a janela para não atrapalhar
+    else:
+        log_interface("[MODO TESTE] Janela não será minimizada para facilitar acompanhamento")
+
+    status_label.config(text="Status: Rodando" + (" [TESTE]" if MODO_TESTE else ""))
+    set_title_running(True, " [MODO TESTE]" if MODO_TESTE else "")
     estado["executando"] = True
+    log_interface("[DEBUG] Robô iniciado" + (" em modo teste" if MODO_TESTE else " e minimizado"))
     threading.Thread(target=robo_loop, daemon=True).start()
     threading.Thread(target=monitorar_tecla, daemon=True).start()
 

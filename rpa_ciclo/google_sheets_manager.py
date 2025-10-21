@@ -9,7 +9,7 @@ from googleapiclient.discovery import build
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 # Configurações da planilha
-SPREADSHEET_ID = '1KMS-1_FY6-cU26ZlaFu5jciSHEWlmluHo-QOFbB1LFE'  # PLANILHA MODO TESTE BANCADA
+SPREADSHEET_ID = '1UgJWxmnYzv-FVTT4rrrVEx3J_MNXZsctwrPSTyyylPQ'  # BANCADA (Produção)
 SHEET_NAME = None  # Será detectado automaticamente
 RANGE_NAME = 'A:J'  # Colunas A até J (Codigo, Data + 8 colunas principais)
 

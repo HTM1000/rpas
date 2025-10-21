@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pyinstaller:*)",
+      "Bash(python -m PyInstaller:*)",
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Read(//c/Users/ID135/OneDrive/Desktop/www/rpas/rpa_ciclo/**)",
+      "Bash(timeout /t 30 /nobreak cmd /c \"python main_ciclo.py 2>&1 | head -n 100\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

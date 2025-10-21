@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/ID135/OneDrive/Desktop/www/rpas/rpa_oracle/**)",
+      "Read(//c/Users/ID135/OneDrive/Desktop/www/rpas/rpa_bancada/**)",
+      "Bash(git log --all --format=\"%ai %H\" --name-only -- main.py main_v2.py)",
+      "Read(//c/Users/ID135/OneDrive/Desktop/www/rpas/rpa_nfri/**)",
+      "Read(//c/Users/ID135/OneDrive/Desktop/www/rpas/**)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

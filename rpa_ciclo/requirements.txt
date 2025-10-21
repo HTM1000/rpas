@@ -14,6 +14,13 @@ pyperclip>=1.8.2
 # Imagens e GUI
 Pillow>=9.0.0
 
+# =================== OCR (VERIFICAÇÃO VISUAL) ===================
+# OCR para validação visual dos campos
+pytesseract>=0.3.10
+
+# Processamento de dados
+pandas>=1.5.0
+
 # =================== GOOGLE SHEETS ===================
 # Google APIs
 google-api-python-client>=2.0.0

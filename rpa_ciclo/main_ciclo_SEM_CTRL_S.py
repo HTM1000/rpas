@@ -117,22 +117,31 @@ base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 # ─── CONFIGURAÇÕES DE MODO ──────────────────────────────────────────────────
 # IMPORTANTE: Altere para True para testes, False para PRODUÇÃO
 MODO_TESTE = False  # True = simula movimentos sem pyautogui | False = PRODUÇÃO
-PARAR_QUANDO_VAZIO = False  # True = para quando vazio (teste) | False = continua rodando (PRODUÇÃO)
+PARAR_QUANDO_VAZIO = True  # True = para quando vazio (teste)
 SIMULAR_FALHA_SHEETS = False  # True = força falhas para testar retry | False = PRODUÇÃO
 LIMITE_ITENS_TESTE = 50  # Limite de itens por ciclo no modo teste
+SEM_CTRL_S = True  # TESTE: NÃO executa Ctrl+S
+
+print("=" * 70)
+print("🧪 VERSÃO TESTE - SEM Ctrl+S")
+print("=" * 70)
+print("- Planilha de TESTE (14HqO...)")
+print("- Cache: cache_teste_ciclo.json")
+print("- Ctrl+S será SIMULADO (não executado)")
+print("- OCR funcionando")
+print("=" * 70)
 
 # Controle de execução
 _rpa_running = False
 _gui_log_callback = None
 _ciclo_atual = 0
 _data_inicio_ciclo = None
-_dados_inseridos_oracle = False  # Rastreia se dados foram inseridos no Oracle neste ciclo
 
 # ─── CACHE LOCAL ANTI-DUPLICAÇÃO (IGUAL AO RPA_ORACLE) ──────────────────────
 class CacheLocal:
     """Cache persistente para evitar duplicações no Oracle"""
 
-    def __init__(self, arquivo="processados.json"):
+    def __init__(self, arquivo="cache_teste_ciclo.json"):
         # Usar data_path (diretório do executável) igual ao RPA_Oracle
         data_path = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
         self.arquivo = os.path.join(data_path, arquivo)
@@ -352,13 +361,12 @@ def verificar_campo_ocr(x, y, largura, altura, valor_esperado, nome_campo="Campo
 
 def validar_campos_oracle_ocr(coords, item, quantidade, referencia, sub_o, end_o, sub_d, end_d, salvar_debug=False):
     """
-    Valida todos os campos do Oracle usando OCR com detecção de headers.
-    Captura imagem incluindo headers e valores, localiza headers e busca valores abaixo.
+    Valida todos os campos do Oracle usando OCR antes do Ctrl+S.
 
     Args:
-        coords: Dicionário com coordenadas dos campos (não usado)
+        coords: Dicionário com coordenadas dos campos
         item, quantidade, referencia, sub_o, end_o, sub_d, end_d: Valores esperados
-        salvar_debug: Se True, salva screenshots
+        salvar_debug: Se True, salva screenshots (apenas em modo teste)
 
     Returns:
         bool: True se todos os campos estão corretos, False caso contrário
@@ -367,180 +375,89 @@ def validar_campos_oracle_ocr(coords, item, quantidade, referencia, sub_o, end_o
         gui_log("⚠️ [OCR] pytesseract não disponível, pulando validação visual")
         return True
 
-    gui_log("🔍 [OCR] Iniciando validação visual com detecção de headers...")
+    gui_log("🔍 [OCR] Iniciando validação visual dos campos...")
 
-    try:
-        # COORDENADAS DA IMAGEM (headers + valores)
-        X_INICIO = 67
-        Y_INICIO = 105      # Subiu 35px para pegar headers
-        LARGURA_TOTAL = 1236
-        ALTURA_TOTAL = 70   # Dobrou: 35px headers + 35px valores
+    # Dimensões padrão dos campos (ajustar conforme necessário)
+    LARGURA_CAMPO = 100
+    ALTURA_CAMPO = 20
 
-        # Capturar imagem grande
-        screenshot = ImageGrab.grab(bbox=(X_INICIO, Y_INICIO, X_INICIO + LARGURA_TOTAL, Y_INICIO + ALTURA_TOTAL))
-        screenshot.save("debug_ocr_TODOS_CAMPOS.png")
-        gui_log("[DEBUG] Screenshot completo salvo: debug_ocr_TODOS_CAMPOS.png")
+    erros = []
 
-        # Processar imagem (escala de cinza + contraste)
-        from PIL import ImageEnhance
-        screenshot_processado = screenshot.convert('L')
-        enhancer = ImageEnhance.Contrast(screenshot_processado)
-        screenshot_processado = enhancer.enhance(2.0)
-        screenshot_processado.save("debug_ocr_TODOS_CAMPOS_processado.png")
+    # Validar Item (NÃO salva screenshot em produção)
+    sucesso, texto, conf = verificar_campo_ocr(
+        coords["item"][0], coords["item"][1],
+        LARGURA_CAMPO, ALTURA_CAMPO,
+        item, "Item", salvar_debug
+    )
+    if not sucesso:
+        erros.append(f"Item (esperado: {item}, lido: {texto})")
 
-        # OCR com detecção de posição (retorna X, Y, Width, Height de cada palavra)
-        import pandas as pd
-        ocr_data = pytesseract.image_to_data(screenshot_processado, config='--psm 6', output_type=pytesseract.Output.DICT)
+    # Validar Quantidade
+    sucesso, texto, conf = verificar_campo_ocr(
+        coords["quantidade"][0], coords["quantidade"][1],
+        80, ALTURA_CAMPO,
+        quantidade, "Quantidade", salvar_debug
+    )
+    if not sucesso:
+        erros.append(f"Quantidade (esperado: {quantidade}, lido: {texto})")
 
-        # Converter para DataFrame para facilitar análise
-        df_ocr = pd.DataFrame(ocr_data)
-        df_ocr = df_ocr[df_ocr['conf'] != -1]  # Remover linhas vazias
-        df_ocr['text'] = df_ocr['text'].str.strip()
-        df_ocr = df_ocr[df_ocr['text'] != '']  # Remover textos vazios
+    # Validar Referência
+    sucesso, texto, conf = verificar_campo_ocr(
+        coords["Referencia"][0], coords["Referencia"][1],
+        80, ALTURA_CAMPO,
+        referencia, "Referência", salvar_debug
+    )
+    if not sucesso:
+        erros.append(f"Referência (esperado: {referencia}, lido: {texto})")
 
-        gui_log(f"[OCR] {len(df_ocr)} palavras detectadas")
+    # Validar Sub.Origem
+    sucesso, texto, conf = verificar_campo_ocr(
+        coords["sub_origem"][0], coords["sub_origem"][1],
+        LARGURA_CAMPO, ALTURA_CAMPO,
+        sub_o, "Sub.Origem", salvar_debug
+    )
+    if not sucesso:
+        erros.append(f"Sub.Origem (esperado: {sub_o}, lido: {texto})")
 
-        # Mapeamento: campo → header no Oracle
-        HEADERS_ORACLE = {
-            "item": "Item",
-            "quantidade": "Quantidade",
-            "referencia": "Referência",
-            "sub_origem": "Subinvent.",
-            "end_origem": "Endereço",
-            "sub_destino": "Para Subinv.",
-            "end_destino": "Para Loc."
-        }
+    # Validar End.Origem
+    sucesso, texto, conf = verificar_campo_ocr(
+        coords["end_origem"][0], coords["end_origem"][1],
+        LARGURA_CAMPO, ALTURA_CAMPO,
+        end_o, "End.Origem", salvar_debug
+    )
+    if not sucesso:
+        erros.append(f"End.Origem (esperado: {end_o}, lido: {texto})")
 
-        # Valores esperados (normalizar tudo)
-        def normalizar_valor(val):
-            """Remove espaços, pontos, vírgulas e converte para maiúsculas"""
-            return str(val).upper().replace(" ", "").replace(",", ".").replace(".", "").strip()
+    # Se não é COD, validar destino
+    if not str(referencia).strip().upper().startswith("COD"):
+        sucesso, texto, conf = verificar_campo_ocr(
+            coords["sub_destino"][0], coords["sub_destino"][1],
+            LARGURA_CAMPO, ALTURA_CAMPO,
+            sub_d, "Sub.Destino", salvar_debug
+        )
+        if not sucesso:
+            erros.append(f"Sub.Destino (esperado: {sub_d}, lido: {texto})")
 
-        valores_esperados = {
-            "item": str(item).upper().strip(),
-            "quantidade": str(quantidade).strip(),  # Manter original para quantidade
-            "referencia": str(referencia).upper().strip(),
-            "sub_origem": str(sub_o).upper().strip(),
-            "end_origem": str(end_o).upper().strip(),
-        }
+        sucesso, texto, conf = verificar_campo_ocr(
+            coords["end_destino"][0], coords["end_destino"][1],
+            LARGURA_CAMPO, ALTURA_CAMPO,
+            end_d, "End.Destino", salvar_debug
+        )
+        if not sucesso:
+            erros.append(f"End.Destino (esperado: {end_d}, lido: {texto})")
 
-        # Se não é COD, adicionar destino
-        if not str(referencia).strip().upper().startswith("COD"):
-            valores_esperados["sub_destino"] = str(sub_d).upper().strip()
-            valores_esperados["end_destino"] = str(end_d).upper().strip()
-
-        # Função auxiliar para busca flexível
-        def encontrar_texto(df, texto_busca, tolerancia=0.8):
-            """Busca texto com similaridade"""
-            from difflib import SequenceMatcher
-            texto_busca_norm = texto_busca.upper().replace(" ", "")
-
-            for _, row in df.iterrows():
-                texto_lido = str(row['text']).upper().replace(" ", "")
-                # Similaridade exata ou parcial
-                if texto_busca_norm in texto_lido or texto_lido in texto_busca_norm:
-                    return row
-                # Similaridade por ratio
-                ratio = SequenceMatcher(None, texto_busca_norm, texto_lido).ratio()
-                if ratio >= tolerancia:
-                    return row
-            return None
-
-        # Validar cada campo usando headers como referência
-        erros = []
-        for campo, valor_esperado in valores_esperados.items():
-            header_oracle = HEADERS_ORACLE[campo]
-
-            # Tentar encontrar o header
-            header_row = encontrar_texto(df_ocr, header_oracle, tolerancia=0.7)
-
-            if header_row is not None:
-                # Header encontrado! Agora buscar valor na mesma coluna (X similar) mas Y abaixo
-                header_x = header_row['left']
-                header_y = header_row['top']
-                header_width = header_row.get('width', 0)
-
-                # Margem mais restrita para quantidade (±20px), outros campos (±30px)
-                margem_x = 20 if campo == "quantidade" else 30
-
-                # Procurar textos abaixo do header (Y maior, X próximo)
-                valores_abaixo = df_ocr[
-                    (df_ocr['top'] > header_y) &
-                    (df_ocr['left'].between(header_x - margem_x, header_x + margem_x))
-                ]
-
-                # Debug: mostrar o que foi encontrado abaixo do header
-                if len(valores_abaixo) > 0:
-                    textos_debug = [f"'{t}' (X:{x})" for t, x in zip(valores_abaixo['text'].tolist(), valores_abaixo['left'].tolist())]
-                    gui_log(f"[DEBUG] Abaixo de '{header_oracle}' (X:{header_x}): {', '.join(textos_debug[:3])}")
-
-                # Verificar se o valor esperado está nesses textos
-                valor_encontrado = False
-                for _, val_row in valores_abaixo.iterrows():
-                    texto_lido = str(val_row['text']).upper().replace(" ", "")
-                    valor_busca = valor_esperado.upper().replace(" ", "")
-                    val_x = val_row['left']
-
-                    # Para quantidade: validação EXATA (sem similaridade)
-                    if campo == "quantidade":
-                        texto_lido_norm = texto_lido.replace(",", "").replace(".", "")
-                        valor_busca_norm = valor_busca.replace(",", "").replace(".", "")
-
-                        # Comparação EXATA de números
-                        if valor_busca_norm == texto_lido_norm:
-                            gui_log(f"✅ [OCR] {campo} ('{valor_esperado}'): encontrado como '{val_row['text']}' (X:{val_x})")
-                            valor_encontrado = True
-                            break
-                    else:
-                        # Comparação flexível para outros campos
-                        if valor_busca in texto_lido or texto_lido in valor_busca:
-                            gui_log(f"✅ [OCR] {campo} ('{valor_esperado}'): encontrado como '{val_row['text']}' (X:{val_x})")
-                            valor_encontrado = True
-                            break
-
-                        # Similaridade apenas para campos de texto (não quantidade)
-                        from difflib import SequenceMatcher
-                        ratio = SequenceMatcher(None, valor_busca, texto_lido).ratio()
-                        if ratio >= 0.75:
-                            gui_log(f"✅ [OCR] {campo} ('{valor_esperado}'): similar a '{val_row['text']}' ({ratio*100:.0f}%) (X:{val_x})")
-                            valor_encontrado = True
-                            break
-
-                if not valor_encontrado:
-                    textos_encontrados = ", ".join([f"'{t}' (X:{x})" for t, x in zip(valores_abaixo['text'].tolist(), valores_abaixo['left'].tolist())])
-                    gui_log(f"❌ [OCR] {campo}: esperado '{valor_esperado}', abaixo de '{header_oracle}' (X:{header_x}) encontrei: {textos_encontrados}")
-                    erros.append(f"{campo} (esperado: {valor_esperado})")
-            else:
-                # Header não encontrado, fazer busca geral na imagem (sem log)
-                # Busca geral
-                encontrado = encontrar_texto(df_ocr, valor_esperado, tolerancia=0.75)
-                if encontrado is not None:
-                    gui_log(f"✅ [OCR] {campo}: '{valor_esperado}' encontrado")
-                else:
-                    gui_log(f"❌ [OCR] {campo}: '{valor_esperado}' NÃO encontrado")
-                    erros.append(f"{campo} (esperado: {valor_esperado})")
-
-        # Resultado final
-        if erros:
-            gui_log(f"❌ [OCR] Validação FALHOU. {len(erros)} campo(s) com problema:")
-            for erro in erros:
-                gui_log(f"   - {erro}")
-            # Mostrar todo texto lido para debug
-            todos_textos = " | ".join(df_ocr['text'].tolist())
-            gui_log(f"[OCR] Todos textos lidos: {todos_textos}")
-            return False
-        else:
-            gui_log("✅ [OCR] Validação visual OK - Todos os campos validados!")
-            return True
-
-    except Exception as e:
-        gui_log(f"⚠️ [OCR] Erro na validação: {e}")
-        import traceback
-        gui_log(traceback.format_exc())
-        return True  # Em caso de erro, não bloqueia
+    # Resultado final
+    if erros:
+        gui_log(f"❌ [OCR] Validação visual FALHOU. Erros encontrados:")
+        for erro in erros:
+            gui_log(f"   - {erro}")
+        return False
+    else:
+        gui_log("✅ [OCR] Validação visual OK - Todos os campos conferem!")
+        return True
 
 # =================== FUNÇÕES DE AUTOMAÇÃO ===================
-def clicar_coordenada(x, y, duplo=False, clique_pausa_duplo=False, descricao=""):
+def clicar_coordenada(x, y, duplo=False, descricao=""):
     """Clica em uma coordenada específica na tela"""
     if descricao:
         gui_log(f"🖱️ {descricao}")
@@ -553,15 +470,7 @@ def clicar_coordenada(x, y, duplo=False, clique_pausa_duplo=False, descricao="")
     pyautogui.moveTo(x, y, duration=0.8)
     time.sleep(0.5)
 
-    if clique_pausa_duplo:
-        # Bancada: click → espera 2s → doubleClick (igual você faz manualmente)
-        pyautogui.click()
-        gui_log("⏳ Aguardando 2s...")
-        time.sleep(2.0)
-        gui_log("🖱️ Executando doubleClick()...")
-        pyautogui.doubleClick()
-    elif duplo:
-        # Duplo clique nativo do pyautogui
+    if duplo:
         pyautogui.doubleClick()
     else:
         pyautogui.click()
@@ -670,9 +579,6 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
         config: Configurações do RPA
         primeiro_ciclo: Se True, após 2 tentativas sem itens, pula para Bancada
     """
-    global _dados_inseridos_oracle
-    _dados_inseridos_oracle = False  # Resetar flag no início
-
     gui_log("🤖 ETAPA 5: Processamento no Oracle")
 
     try:
@@ -684,7 +590,7 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
 
         # Autenticar Google Sheets
         SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-        SPREADSHEET_ID = "14yUMc12iCQxqVzGTBvY6g9bIFfMhaQZ26ydJk_4ZeDk"  # PLANILHA PRODUÇÃO ORACLE
+        SPREADSHEET_ID = "14HqOFoAxzZWy0yH3vJC6_6xaY5YmU-pI4xxAyTn31wQ"  # PLANILHA TESTE
         SHEET_NAME = "Separação"
 
         token_path = os.path.join(BASE_DIR, "token.json")
@@ -1047,11 +953,16 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
                     # ✅ TODAS AS VALIDAÇÕES PASSARAM - EXECUTAR Ctrl+S
                     # ═══════════════════════════════════════════════════════════════
 
-                    # Salvar (Ctrl+S)
-                    gui_log("💾 [CTRL+S] Executando salvamento no Oracle...")
-                    pyautogui.hotkey("ctrl", "s")
-                    gui_log("⏳ Aguardando Oracle salvar...")
-                    time.sleep(3)  # Aguardar Oracle salvar antes de marcar como concluído
+                    # ⚠️ TESTE: Ctrl+S DESABILITADO
+                    if globals().get('SEM_CTRL_S', False):
+                        gui_log("🧪 [TESTE] Ctrl+S SIMULADO (não executado)")
+                        time.sleep(1)  # Simula tempo de salvamento
+                    else:
+                        # Salvar (Ctrl+S) - PRODUÇÃO
+                        gui_log("💾 [CTRL+S] Executando salvamento no Oracle...")
+                        pyautogui.hotkey("ctrl", "s")
+                        gui_log("⏳ Aguardando Oracle salvar...")
+                        time.sleep(3)  # Aguardar Oracle salvar antes de marcar como concluído
 
                     gui_log("⏳ Inicio inserção no cache...")
 
@@ -1085,11 +996,11 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
                     gui_log(f"⚠️ Falha ao atualizar Sheets: {err}. Retry em background...")
 
                 itens_processados += 1
-                _dados_inseridos_oracle = True  # Marcar que dados foram inseridos
                 time.sleep(0.5)
 
-            # ✅ CONTINUA PROCESSANDO TODOS OS ITENS DISPONÍVEIS
-            # (Removido break que limitava a 1 item por ciclo)
+            # Saída do loop após processar pelo menos 1 item
+            if itens_processados > 0:
+                break
 
         # Verificar se processou pelo menos 1 item antes de continuar
         if itens_processados == 0:
@@ -1110,63 +1021,52 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
 def etapa_06_navegacao_pos_oracle(config):
     """Etapa 6: Navegação após RPA_Oracle - Fechar janelas e abrir Bancada
 
-    NOVO FLUXO SIMPLIFICADO:
-    - Se inseriu dados: limpar + fechar 2 X
-    - Se NÃO inseriu: apenas fechar 2 X
-    - Depois abrir Bancada
+    NOVO FLUXO (fluxo único e consistente):
+    1. Clicar na aba 'Transferência do Subinventário' (420, 156)
+    2. Clicar no X do 'Transferência do Subinventário (BC2)'
+    3. Clicar no 'Sim' do modal de decisão (647, 477)
+    4. Clicar no 'Sim' do modal Forms (736, 497)
+    5. Clicar para abrir 'Bancada de Material'
     """
-    global _dados_inseridos_oracle
+    gui_log("📋 ETAPA 6: Navegação pós-Oracle (novo fluxo)")
 
-    gui_log("📋 ETAPA 6: Fechamento de modais e abertura da Bancada")
+    # 1. Clicar na aba "Transferência do Subinventário"
+    gui_log("📑 Clicando na aba 'Transferência do Subinventário'...")
+    coord = config["coordenadas"]["tela_06_aba_transferencia_subinventario"]
+    clicar_coordenada(coord["x"], coord["y"], descricao=coord["descricao"])
 
     tempo_espera = config["tempos_espera"]["entre_cliques"]
-
-    # Verificar se dados foram inseridos no Oracle
-    if _dados_inseridos_oracle:
-        gui_log("🧹 Dados foram inseridos - Limpando formulário primeiro...")
-    else:
-        gui_log("ℹ️ Nenhum dado foi inserido - Fechando modais...")
-
-    # 1. Limpar formulário (botão Limpar)
-    coord = config["coordenadas"]["tela_06_limpar"]
-    clicar_coordenada(coord["x"], coord["y"], descricao=coord["descricao"])
-
-    if not aguardar_com_pausa(tempo_espera, "Aguardando limpeza"):
-       return False
-
-    # 2. Fechar janela "Subinventory Transfer (BC2)" - Botão X
-    gui_log("🔴 Fechando 'Subinventory Transfer (BC2)'...")
-    coord = config["coordenadas"]["tela_06_fechar_subinventory_transfer"]
-    clicar_coordenada(coord["x"], coord["y"], descricao=coord["descricao"])
-
-    if not aguardar_com_pausa(tempo_espera, "Aguardando fechar primeira janela"):
+    if not aguardar_com_pausa(tempo_espera, "Aguardando aba ativar"):
         return False
 
-    # 3. Fechar janela "Transferencia do Subinventario (BC2)" - Botão X
-    gui_log("🔴 Fechando 'Transferencia do Subinventario (BC2)'...")
+    # 2. Fechar janela "Transferencia do Subinventario (BC2)" - Botão X
+    gui_log("🔴 Fechando janela 'Transferencia do Subinventario (BC2)'...")
     coord = config["coordenadas"]["tela_06_fechar_transferencia_subinventario_bc2"]
     clicar_coordenada(coord["x"], coord["y"], descricao=coord["descricao"])
 
-    if not aguardar_com_pausa(tempo_espera, "Aguardando fechar segunda janela"):
+    tempo_espera = config["tempos_espera"]["entre_cliques"]
+    if not aguardar_com_pausa(tempo_espera, "Aguardando modal de decisão"):
         return False
 
-    # 4. Clicar em "Janela" para dar foco
-    gui_log("🖱️ Clicando em 'Janela'...")
-    coord = config["coordenadas"]["navegador_janela"]
+    # 3. Clicar no 'Sim' do modal de decisão
+    gui_log("✅ Clicando no 'Sim' do modal de decisão...")
+    coord = config["coordenadas"]["tela_06_modal_decisao_sim"]
     clicar_coordenada(coord["x"], coord["y"], descricao=coord["descricao"])
 
-    if not aguardar_com_pausa(tempo_espera, "Aguardando foco na janela"):
+    tempo_espera = config["tempos_espera"]["entre_cliques"]
+    if not aguardar_com_pausa(tempo_espera, "Aguardando modal Forms"):
         return False
 
-    # 5. Clicar no menu de navegação
-    gui_log("🖱️ Clicando no menu de navegação...")
-    coord = config["coordenadas"]["navegador_menu"]
+    # 4. Clicar no 'Sim' do modal Forms
+    gui_log("✅ Clicando no 'Sim' do modal Forms...")
+    coord = config["coordenadas"]["tela_06_modal_forms_sim"]
     clicar_coordenada(coord["x"], coord["y"], descricao=coord["descricao"])
 
-    if not aguardar_com_pausa(tempo_espera, "Aguardando menu navegação"):
+    tempo_espera = config["tempos_espera"]["entre_cliques"]
+    if not aguardar_com_pausa(tempo_espera, "Aguardando janelas fecharem"):
         return False
 
-    # 6. Duplo clique para abrir a bancada
+    # 5. Clicar para abrir a tela da bancada (clique simples, não duplo)
     gui_log("📂 Abrindo Bancada de Material...")
     coord = config["coordenadas"]["tela_07_bancada_material"]
     duplo_clique = coord.get("duplo_clique", False)

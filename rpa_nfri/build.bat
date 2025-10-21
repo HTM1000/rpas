@@ -12,7 +12,7 @@ if exist RPA_NFRi.spec.bak del RPA_NFRi.spec.bak
 
 echo.
 echo [2/3] Gerando executavel com PyInstaller...
-pyinstaller RPA_NFRi.spec
+python -m PyInstaller RPA_NFRi.spec
 
 echo.
 echo [3/3] Verificando resultado...

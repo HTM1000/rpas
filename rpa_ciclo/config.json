@@ -1,20 +1,20 @@
 {
   "coordenadas": {
     "tela_01_transferencia_subinventario": {
-      "x": 771,
-      "y": 388,
+      "x": 593,
+      "y": 224,
       "descricao": "Duplo clique na opção Transferência de Subinventário"
     },
     "tela_02_campo_tipo": {
       "x": 155,
-      "y": 217,
+      "y": 215,
       "descricao": "Clique no campo Tipo, digita 'SUB', TAB e ENTER",
       "digitar": "SUB",
       "acoes": ["tab", "enter"]
     },
     "tela_03_pastinha_funcionario": {
       "x": 32,
-      "y": 120,
+      "y": 115,
       "descricao": "Clique na pastinha para selecionar funcionário"
     },
     "tela_04_selecionar_wallatas": {
@@ -28,21 +28,71 @@
       "y": 635,
       "descricao": "Clique no botão Sim"
     },
-    "tela_06_janela_navegador": {
-      "x": 345,
-      "y": 180,
-      "descricao": "Clique na janela de navegação após RPA_Oracle"
+    "tela_06_aba_transferencia_subinventario": {
+      "x": 420,
+      "y": 156,
+      "descricao": "Clique na aba 'Transferência do Subinventário'"
+    },
+    "tela_06_limpar": {
+      "x": 332,
+      "y": 66,
+      "descricao": "Clique no botão Limpar"
+    },
+    "tela_06_fechar_subinventory_transfer": {
+      "x": 1293,
+      "y": 92,
+      "descricao": "Fechar janela 'Subinventory Transfer (BC2)' - Botão X"
+    },
+    "tela_06_fechar_transferencia_subinventario_bc2": {
+      "x": 494,
+      "y": 91,
+      "descricao": "Fechar janela 'Transferencia do Subinventario (BC2)' - Botão X"
+    },
+    "tela_06_modal_decisao_sim": {
+      "x": 647,
+      "y": 477,
+      "descricao": "Clique no botão 'Sim' do modal de decisão"
+    },
+    "tela_06_modal_forms_sim": {
+      "x": 736,
+      "y": 497,
+      "descricao": "Clique no botão 'Sim' do modal Forms"
+    },
+    "navegador_janela": {
+      "x": 340,
+      "y": 40,
+      "descricao": "Clique em 'Janela' para dar foco"
+    },
+    "navegador_menu": {
+      "x": 376,
+      "y": 127,
+      "descricao": "Clique no menu de navegação"
     },
     "tela_07_bancada_material": {
-      "x": 784,
-      "y": 452,
+      "x": 598,
+      "y": 284,
       "descricao": "Duplo clique em '4. Bancada de Material'",
       "duplo_clique": true
     },
     "tela_08_fechar_bancada": {
-      "x": 754,
-      "y": 97,
+      "x": 746,
+      "y": 90,
       "descricao": "Clique no X para fechar a Bancada"
+    },
+    "bancada_detalhado": {
+      "x": 273,
+      "y": 358,
+      "descricao": "Clique no botão Detalhado da Bancada"
+    },
+    "bancada_localizar": {
+      "x": 524,
+      "y": 689,
+      "descricao": "Clique no botão Localizar da Bancada"
+    },
+    "bancada_celula_org": {
+      "x": 318,
+      "y": 174,
+      "descricao": "Clique na primeira célula (Org) da grid"
     }
   },
   "textos": {
@@ -51,10 +101,10 @@
     "bancada_opcao": "4. Bancada de Material"
   },
   "tempos_espera": {
-    "entre_cliques": 4.5,
+    "entre_cliques": 3,
     "apos_modal": 5.0,
-    "apos_rpa_oracle": 6.0,
-    "apos_rpa_bancada": 6.0,
+    "apos_rpa_oracle": 4.0,
+    "apos_rpa_bancada": 4.0,
     "ciclo_completo": 1800,
     "comentario": "ciclo_completo está em segundos (30 minutos = 1800s)"
   },
