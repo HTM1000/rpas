@@ -1,6 +1,0 @@
-quando quantidade for 0 informe: "Quantidade Zero"
-quando for Subinvent "RAWINDIR", "RAWMANUT", "RAWWAFIFE" e "Para Subinv." "RAWCENTR" informe: "Transação não autorizada"
-quando ITEM, SUB. ORIGEM, END. ORIGEM, SUB. DESTINO, END. DESTINO estiverem vazios informe: "Campo vazio encontrado"
-quando for Subinvent "RAWINDIR", "RAWMANUT", "RAWWAFIFE" e for diferente deles mesmos no campo "Para Subinv." ex: "RAWINDIR" para "RAWINDIR" informe - "Transação não autorizada"
-
-

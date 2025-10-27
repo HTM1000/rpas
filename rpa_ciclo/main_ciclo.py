@@ -13,8 +13,17 @@ import hashlib
 from pathlib import Path
 from datetime import datetime
 import pyautogui
+import keyboard  # Para monitorar tecla ESC
 import re
 from io import StringIO
+
+# Importar notificador Telegram
+try:
+    from telegram_notifier import inicializar_telegram
+    TELEGRAM_DISPONIVEL = True
+except ImportError:
+    TELEGRAM_DISPONIVEL = False
+    print("[WARN] telegram_notifier não disponível - notificações desabilitadas")
 
 # Configurar encoding UTF-8 para o console Windows
 if sys.platform.startswith('win'):
@@ -33,62 +42,39 @@ except ImportError:
     PANDAS_DISPONIVEL = False
     print("[WARN] pandas não disponível - processamento de bancada desabilitado")
 
-# Importar pytesseract para OCR (verificação visual)
+# Importar OpenCV e numpy para detecção de imagens
+try:
+    import cv2
+    import numpy as np
+    OPENCV_DISPONIVEL = True
+    print("[OK] OpenCV disponível para detecção de imagens")
+except ImportError:
+    OPENCV_DISPONIVEL = False
+    print("[WARN] OpenCV não disponível - usando pyautogui para detecção")
+
+# =================== OCR COM TESSERACT ===================
 try:
     import pytesseract
-    from PIL import Image, ImageGrab
-    PYTESSERACT_DISPONIVEL = True
+    from PIL import ImageGrab, ImageEnhance
 
-    # Configurar caminho do tesseract (para .exe standalone OU desenvolvimento)
-    tesseract_configurado = False
-
-    # 1. PRIORIDADE: Tesseract na pasta local (junto com o .exe ou script)
+    # Configurar caminho do Tesseract (compatível com executável)
     if getattr(sys, 'frozen', False):
-        # Executável PyInstaller: pode estar em tesseract/ ou _internal/tesseract/
-        base_dir = os.path.dirname(sys.executable)
-
-        # Tentar primeiro em _internal/tesseract/ (PyInstaller modo onedir)
-        local_tesseract = os.path.join(base_dir, '_internal', 'tesseract', 'tesseract.exe')
-        if not os.path.exists(local_tesseract):
-            # Fallback: tentar em tesseract/ direto
-            local_tesseract = os.path.join(base_dir, 'tesseract', 'tesseract.exe')
+        # Se estiver rodando como .exe
+        tesseract_path = os.path.join(sys._MEIPASS, 'tesseract', 'tesseract.exe')
     else:
-        # Desenvolvimento: procurar na pasta do script
-        local_tesseract = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tesseract', 'tesseract.exe')
+        # Se estiver rodando como script Python
+        tesseract_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
-    if os.path.exists(local_tesseract):
-        pytesseract.pytesseract.tesseract_cmd = local_tesseract
-        print(f"[OK] Tesseract LOCAL encontrado: {local_tesseract}")
-        tesseract_configurado = True
-
-    # 2. Fallback: Tesseract instalado no sistema
-    if not tesseract_configurado:
-        # Tentar localização padrão do instalador
-        default_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-        if os.path.exists(default_path):
-            pytesseract.pytesseract.tesseract_cmd = default_path
-            print(f"[OK] Tesseract SISTEMA encontrado: {default_path}")
-            tesseract_configurado = True
-        else:
-            # Tentar localizar no PATH
-            import shutil
-            tesseract_cmd = shutil.which('tesseract')
-            if tesseract_cmd:
-                pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
-                print(f"[OK] Tesseract PATH encontrado: {tesseract_cmd}")
-                tesseract_configurado = True
-
-    if not tesseract_configurado:
-        print("[WARN] Tesseract-OCR não encontrado!")
-        print("[WARN] OCR não funcionará. Copie a pasta 'tesseract' para junto do executável.")
+    if os.path.isfile(tesseract_path):
+        pytesseract.pytesseract.tesseract_cmd = tesseract_path
+        PYTESSERACT_DISPONIVEL = True
+        print(f"[OK] Tesseract OCR habilitado: {tesseract_path}")
+    else:
         PYTESSERACT_DISPONIVEL = False
-    else:
-        print("[OK] pytesseract configurado com sucesso")
-
+        print(f"[WARN] Tesseract não encontrado em: {tesseract_path}")
 except ImportError as e:
     PYTESSERACT_DISPONIVEL = False
     print(f"[WARN] pytesseract não disponível: {e}")
-    print("[WARN] Verificação visual por OCR desabilitada")
 
 # Importar módulo Google Sheets (para ciclo)
 try:
@@ -106,6 +92,19 @@ try:
 except ImportError as e:
     GOOGLE_SHEETS_BANCADA_DISPONIVEL = False
     print(f"[WARN] Google Sheets (bancada) não disponível: {e}")
+
+# Importar validador híbrido (substitui OCR)
+try:
+    from validador_hibrido import (
+        validar_campo_oracle_hibrido,
+        validar_campos_oracle_completo,
+        detectar_erro_oracle
+    )
+    VALIDADOR_HIBRIDO_DISPONIVEL = True
+    print("[OK] Validador Híbrido importado com sucesso")
+except ImportError as e:
+    VALIDADOR_HIBRIDO_DISPONIVEL = False
+    print(f"[WARN] Validador Híbrido não disponível: {e}")
 
 # =================== CONFIGURAÇÕES GLOBAIS ===================
 BASE_DIR = Path(__file__).parent.resolve() if not getattr(sys, 'frozen', False) else Path(sys.executable).parent
@@ -127,6 +126,7 @@ _gui_log_callback = None
 _ciclo_atual = 0
 _data_inicio_ciclo = None
 _dados_inseridos_oracle = False  # Rastreia se dados foram inseridos no Oracle neste ciclo
+_telegram_notifier = None  # Instância do notificador Telegram
 
 # ─── CACHE LOCAL ANTI-DUPLICAÇÃO (IGUAL AO RPA_ORACLE) ──────────────────────
 class CacheLocal:
@@ -254,6 +254,19 @@ def stop_rpa():
     _rpa_running = False
     gui_log("🛑 Solicitação de parada recebida")
 
+    # 🔧 CORREÇÃO CRÍTICA: Forçar parada após 3 segundos se não parar naturalmente
+    import threading
+    def forcar_parada():
+        import time
+        time.sleep(3)  # Aguarda 3s para parada natural
+        if not _rpa_running:  # Se ainda está marcado como parado
+            gui_log("⚠️ RPA não parou naturalmente em 3s - FORÇANDO sys.exit()")
+            import sys
+            sys.exit(0)  # Força parada do programa
+
+    thread_forcada = threading.Thread(target=forcar_parada, daemon=True)
+    thread_forcada.start()
+
 def is_rpa_running():
     """Verifica se RPA está rodando"""
     return _rpa_running
@@ -290,6 +303,115 @@ def indice_para_coluna(idx):
         idx //= 26
     return resultado
 
+def corrigir_confusao_ocr(texto):
+    """
+    Corrige caracteres comumente confundidos pelo OCR.
+
+    Confusões comuns:
+    - A ↔ 4
+    - B ↔ 8
+    - O ↔ 0 (letra o ↔ zero)
+    - I ↔ 1
+    - S ↔ 5
+    - Z ↔ 2
+
+    MELHORIAS IMPLEMENTADAS:
+    1. Correção de símbolos especiais: £→E, €→E (ex: "£20298" → "E20298")
+    2. Correção de o→0 em qualquer posição (ex: "E2o294" → "E20294")
+    3. Validação contextual para padrões letra+dígitos+letra
+    4. Correção do último caractere (ex: "E20294" → "E2029A", "E20298" → "E2029B")
+
+    Args:
+        texto: Texto lido pelo OCR
+
+    Returns:
+        str: Texto com correções aplicadas
+    """
+    if not texto:
+        return texto
+
+    import re
+
+    texto_original = texto
+    texto_corrigido = texto.upper().strip()
+
+    # ═══════════════════════════════════════════════════════════════
+    # PASSO 0: Corrigir símbolos especiais confundidos (£ → E)
+    # ═══════════════════════════════════════════════════════════════
+    # OCR frequentemente confunde E com £ no início de códigos
+    if texto_corrigido.startswith('£'):
+        texto_corrigido = 'E' + texto_corrigido[1:]
+        gui_log(f"🔧 [OCR SÍMBOLO] '£' → 'E' (início de código)")
+
+    # Corrigir outros símbolos comuns
+    texto_corrigido = texto_corrigido.replace('€', 'E')  # Euro → E
+    texto_corrigido = texto_corrigido.replace('£', 'E')  # Libra → E (qualquer posição)
+
+    # ═══════════════════════════════════════════════════════════════
+    # PASSO 1: Corrigir confusões letra↔número em QUALQUER POSIÇÃO
+    # ═══════════════════════════════════════════════════════════════
+    # Detectar padrão: Começa com LETRA (contexto alfanumérico)
+    if re.match(r'^[A-Z]', texto_corrigido):
+        # Mapa de correções bidirecionais
+        correcoes_posicao = {
+            'o': '0',  # letra o minúscula → zero (CRÍTICO para "E2o294" → "E20294")
+            'O': '0',  # letra O maiúscula → zero
+            'l': '1',  # letra l minúscula → um
+            'I': '1',  # letra I maiúscula → um (em contexto numérico)
+            's': '5',  # letra s minúscula → cinco
+            'S': '5',  # letra S maiúscula → cinco
+            'z': '2',  # letra z minúscula → dois
+            'Z': '2',  # letra Z maiúscula → dois
+        }
+
+        # Aplicar correções em todo o texto (exceto primeiro caractere que é letra)
+        resultado = texto_corrigido[0]  # Preserva primeira letra
+        for i, char in enumerate(texto_corrigido[1:], start=1):
+            # Se encontrar letra minúscula em contexto numérico, corrigir
+            if char in correcoes_posicao:
+                # Verificar se há dígitos ao redor (contexto numérico)
+                tem_digito_antes = i > 1 and texto_corrigido[i-1].isdigit()
+                tem_digito_depois = i < len(texto_corrigido)-1 and texto_corrigido[i+1].isdigit()
+
+                if tem_digito_antes or tem_digito_depois:
+                    resultado += correcoes_posicao[char]
+                else:
+                    resultado += char
+            else:
+                resultado += char
+
+        texto_corrigido = resultado
+
+    # ═══════════════════════════════════════════════════════════════
+    # PASSO 2: Correção do ÚLTIMO CARACTERE (letra confundida com número)
+    # ═══════════════════════════════════════════════════════════════
+    # Padrão: Letra + dígitos + NÚMERO_FINAL que pode ser letra
+    # Ex: E20294 → E2029A (4→A), E20298 → E2029B (8→B)
+    match = re.match(r'^([A-Z]+\d+)([0-9])$', texto_corrigido)
+
+    if match:
+        prefixo = match.group(1)  # Ex: "E2029"
+        ultimo = match.group(2)    # Ex: "4" ou "8"
+
+        # Mapa de confusão comum no final de códigos
+        mapa_final = {
+            '4': 'A',
+            '8': 'B',
+            '0': 'O',
+            '1': 'I',
+            '5': 'S',
+            '2': 'Z'
+        }
+
+        if ultimo in mapa_final:
+            texto_corrigido = prefixo + mapa_final[ultimo]
+
+    # Log apenas se houve correção
+    if texto_corrigido != texto_original.upper().strip():
+        return texto_corrigido
+
+    return texto
+
 def verificar_campo_ocr(x, y, largura, altura, valor_esperado, nome_campo="Campo", salvar_debug=False):
     """
     Captura região da tela e usa OCR para verificar se o valor está correto.
@@ -305,239 +427,308 @@ def verificar_campo_ocr(x, y, largura, altura, valor_esperado, nome_campo="Campo
         tuple: (sucesso: bool, texto_lido: str, confianca: float)
     """
     if not PYTESSERACT_DISPONIVEL:
-        gui_log(f"⚠️ [OCR] pytesseract não disponível, pulando verificação de {nome_campo}")
-        return (True, "", 0.0)  # Retorna sucesso se OCR não estiver disponível
+        gui_log("⚠️ [OCR] pytesseract não disponível, pulando validação visual")
+        return (True, "", 0.0)
 
-    screenshot_path = None
     try:
-        # Capturar região da tela
+        # Capturar região específica
         screenshot = ImageGrab.grab(bbox=(x, y, x + largura, y + altura))
 
-        # Salvar screenshot APENAS se solicitado (modo debug/teste)
         if salvar_debug and MODO_TESTE:
-            screenshot_path = f"debug_ocr_{nome_campo.replace('.', '_')}.png"
-            screenshot.save(screenshot_path)
+            screenshot.save(f"debug_ocr_{nome_campo}.png")
+            gui_log(f"[DEBUG] Screenshot salvo: debug_ocr_{nome_campo}.png")
 
-        # Aplicar OCR
-        texto_lido = pytesseract.image_to_string(screenshot, config='--psm 7').strip()
+        # Processar imagem (escala de cinza + contraste)
+        screenshot_processado = screenshot.convert('L')
+        enhancer = ImageEnhance.Contrast(screenshot_processado)
+        screenshot_processado = enhancer.enhance(2.0)
 
-        # Normalizar textos para comparação (remover espaços, converter para maiúsculas)
-        texto_lido_norm = texto_lido.replace(" ", "").upper()
-        valor_esperado_norm = str(valor_esperado).replace(" ", "").upper()
+        # Extrair texto com pytesseract
+        texto = pytesseract.image_to_string(screenshot_processado, config='--psm 7').strip()
 
-        # Verificar similaridade
-        if texto_lido_norm == valor_esperado_norm:
-            gui_log(f"✅ [OCR] {nome_campo}: '{texto_lido}' == '{valor_esperado}' (CORRETO)")
-            return (True, texto_lido, 1.0)
-        else:
-            # Calcular similaridade parcial (porcentagem de caracteres corretos)
-            if len(valor_esperado_norm) > 0:
-                caracteres_corretos = sum(1 for a, b in zip(texto_lido_norm, valor_esperado_norm) if a == b)
-                confianca = caracteres_corretos / len(valor_esperado_norm)
-            else:
-                confianca = 0.0
+        # Tentar obter confiança (se disponível)
+        try:
+            ocr_data = pytesseract.image_to_data(screenshot_processado, output_type=pytesseract.Output.DICT)
+            confiancas = [int(c) for c in ocr_data['conf'] if c != -1]
+            confianca = sum(confiancas) / len(confiancas) if confiancas else 0
+        except:
+            confianca = 0
 
-            gui_log(f"⚠️ [OCR] {nome_campo}: Esperado '{valor_esperado}', Lido '{texto_lido}' (Similaridade: {confianca*100:.1f}%)")
-
-            # Se similaridade for > 80%, considera aceitável (OCR pode ter pequenos erros)
-            if confianca >= 0.8:
-                gui_log(f"✅ [OCR] {nome_campo}: Similaridade aceitável ({confianca*100:.1f}% >= 80%)")
-                return (True, texto_lido, confianca)
-            else:
-                return (False, texto_lido, confianca)
+        return (True, texto, confianca)
 
     except Exception as e:
-        gui_log(f"⚠️ [OCR] Erro ao verificar {nome_campo}: {e}")
-        return (True, "", 0.0)  # Em caso de erro, não bloqueia o processamento
+        gui_log(f"⚠️ [OCR] Erro ao ler campo {nome_campo}: {e}")
+        return (False, "", 0.0)
 
 def validar_campos_oracle_ocr(coords, item, quantidade, referencia, sub_o, end_o, sub_d, end_d, salvar_debug=False):
     """
-    Valida todos os campos do Oracle usando OCR com detecção de headers.
-    Captura imagem incluindo headers e valores, localiza headers e busca valores abaixo.
+    Valida visualmente se os campos do Oracle foram preenchidos (NÃO VAZIOS) usando OCR.
+
+    SIMPLIFICADO: Apenas verifica se os campos contêm ALGUM texto, sem comparar valores.
+    Isso evita falsos positivos de OCR (£ vs E, o vs 0, 4 vs A, etc).
 
     Args:
-        coords: Dicionário com coordenadas dos campos (não usado)
-        item, quantidade, referencia, sub_o, end_o, sub_d, end_d: Valores esperados
+        coords: Dicionário com coordenadas dos campos
+        item, quantidade, referencia, sub_o, end_o, sub_d, end_d: Valores esperados (apenas para referência COD)
         salvar_debug: Se True, salva screenshots
 
     Returns:
-        bool: True se todos os campos estão corretos, False caso contrário
+        tuple: (validacao_ok: bool, tipo_erro: str)
+            - validacao_ok: True se passou, False se falhou
+            - tipo_erro: "COD_VAZIO" se COD com campos DESTINO vazios, "" se passou
     """
     if not PYTESSERACT_DISPONIVEL:
         gui_log("⚠️ [OCR] pytesseract não disponível, pulando validação visual")
-        return True
+        return (True, "")
 
-    gui_log("🔍 [OCR] Iniciando validação visual com detecção de headers...")
+    gui_log("🔍 [OCR] Iniciando validação visual - APENAS verificando se campos NÃO estão VAZIOS...")
+    gui_log("ℹ️  [OCR] Modo simplificado ativo:")
+    gui_log("    ✓ Verifica presença de texto em cada campo (sem comparar valores)")
+    gui_log("    ✓ Detecta campos vazios que deveriam estar preenchidos")
+    gui_log("    ✓ Para referência COD: valida campos DESTINO preenchidos")
 
     try:
-        # COORDENADAS DA IMAGEM (headers + valores)
+        # Detectar se é referência COD (precisa validar campos DESTINO)
+        eh_cod = referencia and referencia.upper().strip().startswith("COD")
+
+        if eh_cod:
+            gui_log("[OCR] 📋 Referência COD detectada - validando campos DESTINO (não devem estar vazios)")
+        else:
+            gui_log("[OCR] 📋 Referência MOV/OUTRO - validando campos ORIGEM (não devem estar vazios)")
+
+        # ════════════════════════════════════════════════════════════════════
+        # CAPTURA E OCR DA REGIÃO DOS CAMPOS
+        # ════════════════════════════════════════════════════════════════════
         X_INICIO = 67
-        Y_INICIO = 105      # Subiu 35px para pegar headers
+        Y_INICIO = 50
         LARGURA_TOTAL = 1236
-        ALTURA_TOTAL = 70   # Dobrou: 35px headers + 35px valores
+        ALTURA_TOTAL = 130
 
-        # Capturar imagem grande
+        # Capturar imagem
         screenshot = ImageGrab.grab(bbox=(X_INICIO, Y_INICIO, X_INICIO + LARGURA_TOTAL, Y_INICIO + ALTURA_TOTAL))
-        screenshot.save("debug_ocr_TODOS_CAMPOS.png")
-        gui_log("[DEBUG] Screenshot completo salvo: debug_ocr_TODOS_CAMPOS.png")
+        if salvar_debug:
+            screenshot.save("debug_ocr_campos.png")
 
-        # Processar imagem (escala de cinza + contraste)
+        # Processar imagem
         from PIL import ImageEnhance
         screenshot_processado = screenshot.convert('L')
         enhancer = ImageEnhance.Contrast(screenshot_processado)
         screenshot_processado = enhancer.enhance(2.0)
-        screenshot_processado.save("debug_ocr_TODOS_CAMPOS_processado.png")
 
-        # OCR com detecção de posição (retorna X, Y, Width, Height de cada palavra)
+        # OCR com detecção de posição
         import pandas as pd
         ocr_data = pytesseract.image_to_data(screenshot_processado, config='--psm 6', output_type=pytesseract.Output.DICT)
-
-        # Converter para DataFrame para facilitar análise
         df_ocr = pd.DataFrame(ocr_data)
-        df_ocr = df_ocr[df_ocr['conf'] != -1]  # Remover linhas vazias
+        df_ocr = df_ocr[df_ocr['conf'] != -1]
         df_ocr['text'] = df_ocr['text'].str.strip()
-        df_ocr = df_ocr[df_ocr['text'] != '']  # Remover textos vazios
+        df_ocr = df_ocr[df_ocr['text'] != '']
 
-        gui_log(f"[OCR] {len(df_ocr)} palavras detectadas")
+        gui_log(f"[OCR] 📊 Total de palavras detectadas: {len(df_ocr)}")
 
-        # Mapeamento: campo → header no Oracle
-        HEADERS_ORACLE = {
-            "item": "Item",
-            "quantidade": "Quantidade",
-            "referencia": "Referência",
-            "sub_origem": "Subinvent.",
-            "end_origem": "Endereço",
-            "sub_destino": "Para Subinv.",
-            "end_destino": "Para Loc."
-        }
+        # Log simplificado (apenas primeiras 10 palavras)
+        textos_sample = df_ocr['text'].head(10).tolist()
+        textos_formatados = ', '.join([f"'{t}'" for t in textos_sample])
+        gui_log(f"[OCR] Exemplo de textos: {textos_formatados}...")
 
-        # Valores esperados (normalizar tudo)
-        def normalizar_valor(val):
-            """Remove espaços, pontos, vírgulas e converte para maiúsculas"""
-            return str(val).upper().replace(" ", "").replace(",", ".").replace(".", "").strip()
-
-        valores_esperados = {
-            "item": str(item).upper().strip(),
-            "quantidade": str(quantidade).strip(),  # Manter original para quantidade
-            "referencia": str(referencia).upper().strip(),
-            "sub_origem": str(sub_o).upper().strip(),
-            "end_origem": str(end_o).upper().strip(),
-        }
-
-        # Se não é COD, adicionar destino
-        if not str(referencia).strip().upper().startswith("COD"):
-            valores_esperados["sub_destino"] = str(sub_d).upper().strip()
-            valores_esperados["end_destino"] = str(end_d).upper().strip()
-
-        # Função auxiliar para busca flexível
-        def encontrar_texto(df, texto_busca, tolerancia=0.8):
-            """Busca texto com similaridade"""
-            from difflib import SequenceMatcher
-            texto_busca_norm = texto_busca.upper().replace(" ", "")
-
+        # ════════════════════════════════════════════════════════════════════
+        # FUNÇÃO AUXILIAR: Buscar header no OCR
+        # ════════════════════════════════════════════════════════════════════
+        def encontrar_header(df, texto_header):
+            """Busca header no DataFrame OCR (busca aproximada)"""
+            texto_norm = texto_header.upper().replace(" ", "")
             for _, row in df.iterrows():
                 texto_lido = str(row['text']).upper().replace(" ", "")
-                # Similaridade exata ou parcial
-                if texto_busca_norm in texto_lido or texto_lido in texto_busca_norm:
-                    return row
-                # Similaridade por ratio
-                ratio = SequenceMatcher(None, texto_busca_norm, texto_lido).ratio()
-                if ratio >= tolerancia:
+                if texto_norm in texto_lido or texto_lido in texto_norm:
                     return row
             return None
 
-        # Validar cada campo usando headers como referência
-        erros = []
-        for campo, valor_esperado in valores_esperados.items():
-            header_oracle = HEADERS_ORACLE[campo]
+        # ════════════════════════════════════════════════════════════════════
+        # VALIDAÇÃO HÍBRIDA: Campos essenciais + Validação por maioria
+        # ════════════════════════════════════════════════════════════════════
 
-            # Tentar encontrar o header
-            header_row = encontrar_texto(df_ocr, header_oracle, tolerancia=0.7)
+        # CAMPOS CRÍTICOS (devem SEMPRE estar preenchidos)
+        campos_criticos = ["Item", "Quantidade", "Referência"]
+
+        # CAMPOS OPCIONAIS (validação por maioria)
+        campos_opcionais = ["Subinvent.", "Endereço"]
+
+        # CAMPOS DESTINO (validação especial para COD)
+        campos_destino = ["Para Subinv.", "Para Loc."]
+
+        # Contadores
+        erros_criticos = []
+        campos_validados = []  # Lista de (campo, passou)
+
+        # ════════════════════════════════════════════════════════════════════
+        # 1. VALIDAR CAMPOS CRÍTICOS (Item, Quantidade, Referência)
+        # ════════════════════════════════════════════════════════════════════
+        gui_log("[OCR] 🎯 Validando campos CRÍTICOS (devem estar preenchidos):")
+
+        for header_nome in campos_criticos:
+            header_row = encontrar_header(df_ocr, header_nome)
 
             if header_row is not None:
-                # Header encontrado! Agora buscar valor na mesma coluna (X similar) mas Y abaixo
                 header_x = header_row['left']
                 header_y = header_row['top']
-                header_width = header_row.get('width', 0)
+                margem_x = 40
 
-                # Margem mais restrita para quantidade (±20px), outros campos (±30px)
-                margem_x = 20 if campo == "quantidade" else 30
-
-                # Procurar textos abaixo do header (Y maior, X próximo)
                 valores_abaixo = df_ocr[
                     (df_ocr['top'] > header_y) &
-                    (df_ocr['left'].between(header_x - margem_x, header_x + margem_x))
+                    (df_ocr['left'].between(header_x - margem_x, header_x + margem_x)) &
+                    (df_ocr['text'].str.strip() != '')
                 ]
 
-                # Debug: mostrar o que foi encontrado abaixo do header
                 if len(valores_abaixo) > 0:
-                    textos_debug = [f"'{t}' (X:{x})" for t, x in zip(valores_abaixo['text'].tolist(), valores_abaixo['left'].tolist())]
-                    gui_log(f"[DEBUG] Abaixo de '{header_oracle}' (X:{header_x}): {', '.join(textos_debug[:3])}")
-
-                # Verificar se o valor esperado está nesses textos
-                valor_encontrado = False
-                for _, val_row in valores_abaixo.iterrows():
-                    texto_lido = str(val_row['text']).upper().replace(" ", "")
-                    valor_busca = valor_esperado.upper().replace(" ", "")
-                    val_x = val_row['left']
-
-                    # Para quantidade: validação EXATA (sem similaridade)
-                    if campo == "quantidade":
-                        texto_lido_norm = texto_lido.replace(",", "").replace(".", "")
-                        valor_busca_norm = valor_busca.replace(",", "").replace(".", "")
-
-                        # Comparação EXATA de números
-                        if valor_busca_norm == texto_lido_norm:
-                            gui_log(f"✅ [OCR] {campo} ('{valor_esperado}'): encontrado como '{val_row['text']}' (X:{val_x})")
-                            valor_encontrado = True
-                            break
-                    else:
-                        # Comparação flexível para outros campos
-                        if valor_busca in texto_lido or texto_lido in valor_busca:
-                            gui_log(f"✅ [OCR] {campo} ('{valor_esperado}'): encontrado como '{val_row['text']}' (X:{val_x})")
-                            valor_encontrado = True
-                            break
-
-                        # Similaridade apenas para campos de texto (não quantidade)
-                        from difflib import SequenceMatcher
-                        ratio = SequenceMatcher(None, valor_busca, texto_lido).ratio()
-                        if ratio >= 0.75:
-                            gui_log(f"✅ [OCR] {campo} ('{valor_esperado}'): similar a '{val_row['text']}' ({ratio*100:.0f}%) (X:{val_x})")
-                            valor_encontrado = True
-                            break
-
-                if not valor_encontrado:
-                    textos_encontrados = ", ".join([f"'{t}' (X:{x})" for t, x in zip(valores_abaixo['text'].tolist(), valores_abaixo['left'].tolist())])
-                    gui_log(f"❌ [OCR] {campo}: esperado '{valor_esperado}', abaixo de '{header_oracle}' (X:{header_x}) encontrei: {textos_encontrados}")
-                    erros.append(f"{campo} (esperado: {valor_esperado})")
-            else:
-                # Header não encontrado, fazer busca geral na imagem (sem log)
-                # Busca geral
-                encontrado = encontrar_texto(df_ocr, valor_esperado, tolerancia=0.75)
-                if encontrado is not None:
-                    gui_log(f"✅ [OCR] {campo}: '{valor_esperado}' encontrado")
+                    textos = valores_abaixo['text'].tolist()
+                    gui_log(f"  ✅ '{header_nome}': OK (valores: {textos[:2]})")
+                    campos_validados.append((header_nome, True))
                 else:
-                    gui_log(f"❌ [OCR] {campo}: '{valor_esperado}' NÃO encontrado")
-                    erros.append(f"{campo} (esperado: {valor_esperado})")
+                    gui_log(f"  ❌ '{header_nome}': VAZIO!")
+                    erros_criticos.append(f"{header_nome} está vazio (CRÍTICO)")
+                    campos_validados.append((header_nome, False))
+            else:
+                gui_log(f"  ⚠️ '{header_nome}': Header não encontrado")
+                erros_criticos.append(f"{header_nome} não encontrado")
+                campos_validados.append((header_nome, False))
 
-        # Resultado final
-        if erros:
-            gui_log(f"❌ [OCR] Validação FALHOU. {len(erros)} campo(s) com problema:")
-            for erro in erros:
-                gui_log(f"   - {erro}")
-            # Mostrar todo texto lido para debug
-            todos_textos = " | ".join(df_ocr['text'].tolist())
-            gui_log(f"[OCR] Todos textos lidos: {todos_textos}")
-            return False
+        # ════════════════════════════════════════════════════════════════════
+        # 2. VALIDAR CAMPOS OPCIONAIS (Subinvent., Endereço)
+        # ════════════════════════════════════════════════════════════════════
+        gui_log("[OCR] 📋 Validando campos OPCIONAIS:")
+
+        for header_nome in campos_opcionais:
+            header_row = encontrar_header(df_ocr, header_nome)
+
+            if header_row is not None:
+                header_x = header_row['left']
+                header_y = header_row['top']
+                margem_x = 40
+
+                valores_abaixo = df_ocr[
+                    (df_ocr['top'] > header_y) &
+                    (df_ocr['left'].between(header_x - margem_x, header_x + margem_x)) &
+                    (df_ocr['text'].str.strip() != '')
+                ]
+
+                if len(valores_abaixo) > 0:
+                    textos = valores_abaixo['text'].tolist()
+                    gui_log(f"  ✅ '{header_nome}': OK (valores: {textos[:2]})")
+                    campos_validados.append((header_nome, True))
+                else:
+                    gui_log(f"  ⚠️ '{header_nome}': VAZIO (não crítico)")
+                    campos_validados.append((header_nome, False))
+            else:
+                gui_log(f"  ⚠️ '{header_nome}': Header não encontrado")
+                campos_validados.append((header_nome, False))
+
+        # ════════════════════════════════════════════════════════════════════
+        # 3. VALIDAR CAMPOS DESTINO (Para Subinv., Para Loc.)
+        # ════════════════════════════════════════════════════════════════════
+        if eh_cod:
+            gui_log("[OCR] 🔍 REFERÊNCIA COD - Validando campos DESTINO (devem estar preenchidos):")
         else:
-            gui_log("✅ [OCR] Validação visual OK - Todos os campos validados!")
-            return True
+            gui_log("[OCR] 🔍 REFERÊNCIA MOV/OUTRO - Validando campos DESTINO:")
+
+        erros_destino = []
+
+        for header_nome in campos_destino:
+            header_row = encontrar_header(df_ocr, header_nome)
+
+            if header_row is not None:
+                header_x = header_row['left']
+                header_y = header_row['top']
+                margem_x = 40
+
+                # Buscar textos abaixo, EXCLUINDO o próprio header
+                valores_abaixo = df_ocr[
+                    (df_ocr['top'] > header_y + 5) &  # +5 pixels para evitar pegar o header
+                    (df_ocr['left'].between(header_x - margem_x, header_x + margem_x)) &
+                    (df_ocr['text'].str.strip() != '')
+                ]
+
+                # Filtrar textos que não sejam parte do header
+                textos_validos = []
+                for _, row in valores_abaixo.iterrows():
+                    texto = str(row['text']).strip().upper()
+                    # Ignorar se for parte do header
+                    if texto not in ['PARA', 'SUBINV', 'SUBINV.', 'LOC', 'LOC.']:
+                        textos_validos.append(row['text'])
+
+                if len(textos_validos) > 0:
+                    gui_log(f"  ✅ '{header_nome}': OK (valores: {textos_validos[:2]})")
+                    campos_validados.append((header_nome, True))
+                else:
+                    if eh_cod:
+                        # Para COD: campo destino vazio é ERRO CRÍTICO
+                        gui_log(f"  ❌ '{header_nome}': VAZIO (COD precisa destino preenchido)!")
+                        erros_destino.append(f"{header_nome} está vazio (COD)")
+                        campos_validados.append((header_nome, False))
+                    else:
+                        # Para MOV/OUTRO: campo destino vazio é OK
+                        gui_log(f"  ⚠️ '{header_nome}': VAZIO (OK para MOV)")
+                        campos_validados.append((header_nome, False))
+            else:
+                gui_log(f"  ⚠️ '{header_nome}': Header não encontrado")
+                campos_validados.append((header_nome, False))
+
+        # ════════════════════════════════════════════════════════════════════
+        # RESULTADO DA VALIDAÇÃO: Decisão inteligente
+        # ════════════════════════════════════════════════════════════════════
+        gui_log("[OCR] 📊 RESULTADO DA VALIDAÇÃO:")
+
+        # Calcular estatísticas
+        total_campos = len(campos_validados)
+        campos_ok = sum(1 for _, passou in campos_validados if passou)
+        taxa_aprovacao = (campos_ok / total_campos * 100) if total_campos > 0 else 0
+
+        gui_log(f"  Total de campos: {total_campos}")
+        gui_log(f"  Campos OK: {campos_ok}")
+        gui_log(f"  Taxa de aprovação: {taxa_aprovacao:.1f}%")
+
+        # REGRAS DE DECISÃO:
+        # 1. Se TEM erros CRÍTICOS → FALHA
+        # 2. Se COD com campos DESTINO vazios → FALHA
+        # 3. Se taxa aprovação >= 70% → PASSA
+        # 4. Caso contrário → FALHA
+
+        erros_finais = []
+
+        # Regra 1: Erros críticos
+        if erros_criticos:
+            gui_log(f"  ❌ FALHA: {len(erros_criticos)} erro(s) CRÍTICO(S)")
+            erros_finais.extend(erros_criticos)
+
+        # Regra 2: COD com destino vazio
+        if eh_cod and erros_destino:
+            gui_log(f"  ❌ FALHA: COD com campos DESTINO vazios")
+            erros_finais.extend(erros_destino)
+
+        # Regra 3: Taxa de aprovação
+        if not erros_finais:  # Só verifica se não tem erros críticos
+            if taxa_aprovacao >= 70:
+                gui_log(f"  ✅ APROVADO: Taxa de aprovação >= 70% ({taxa_aprovacao:.1f}%)")
+            else:
+                gui_log(f"  ❌ FALHA: Taxa de aprovação < 70% ({taxa_aprovacao:.1f}%)")
+                erros_finais.append(f"Taxa de aprovação insuficiente ({taxa_aprovacao:.1f}%)")
+
+        # Decisão final
+        if erros_finais:
+            gui_log(f"❌ [OCR] Validação FALHOU - {len(erros_finais)} problema(s) encontrado(s):")
+            for erro in erros_finais:
+                gui_log(f"   - {erro}")
+
+            # Detectar tipo de erro
+            tipo_erro = "COD_VAZIO" if eh_cod and any("vazio" in e.lower() for e in erros_finais) else "OUTRO"
+            return (False, tipo_erro)
+        else:
+            gui_log(f"✅ [OCR] Validação APROVADA! ({campos_ok}/{total_campos} campos OK)")
+            return (True, "")
 
     except Exception as e:
         gui_log(f"⚠️ [OCR] Erro na validação: {e}")
         import traceback
         gui_log(traceback.format_exc())
-        return True  # Em caso de erro, não bloqueia
+        return (True, "")  # Em caso de erro, não bloqueia
 
 # =================== FUNÇÕES DE AUTOMAÇÃO ===================
 def clicar_coordenada(x, y, duplo=False, clique_pausa_duplo=False, descricao=""):
@@ -588,14 +779,690 @@ def digitar_texto(texto, pressionar_teclas=None):
             pyautogui.press(tecla)
             time.sleep(0.3)
 
-def aguardar_com_pausa(segundos, mensagem="Aguardando"):
-    """Aguarda um tempo com possibilidade de interrupção"""
+def iniciar_movimento_mouse_continuo():
+    """
+    Inicia uma thread que move o mouse continuamente a cada 1 segundo
+    para evitar hibernação durante operações longas (processamento, upload)
+
+    Returns:
+        threading.Event: Evento para parar a thread quando necessário
+    """
+    import threading
+    import time as time_module
+
+    stop_event = threading.Event()
+
+    def mover_mouse_loop():
+        global _rpa_running
+        contador = 0
+        inicio_thread = time_module.time()
+
+        while not stop_event.is_set() and _rpa_running:  # 🔧 CORREÇÃO: Verificar _rpa_running
+            try:
+                if not MODO_TESTE:
+                    # A cada 15 segundos, pressiona Shift (mais efetivo contra bloqueio de tela)
+                    if contador > 0 and contador % 15 == 0:
+                        pyautogui.press('shift')
+                        gui_log(f"⌨️ [Thread] Shift pressionado (anti-bloqueio de tela)")
+                    else:
+                        # Pegar posição atual
+                        x_atual, y_atual = pyautogui.position()
+
+                        # SEGURANÇA: Se mouse estiver perto do FAILSAFE, move para posição segura
+                        if x_atual < 100 or y_atual < 100:
+                            pyautogui.moveTo(400, 400, duration=0.1)
+                        else:
+                            # Move 5 pixels para direita e volta
+                            pyautogui.moveRel(5, 0, duration=0.1)
+                            pyautogui.moveRel(-5, 0, duration=0.1)
+
+                contador += 1
+
+                # Log a cada 30 movimentos (30 segundos)
+                if contador % 30 == 0:
+                    tempo_decorrido = int(time_module.time() - inicio_thread)
+                    gui_log(f"🖱️ [Thread Anti-Hibernação] {contador} movimentos em {tempo_decorrido}s | Mouse + Shift")
+            except Exception as e:
+                pass  # Ignora erros silenciosamente na thread
+
+            # Aguardar 1 segundo antes do próximo movimento
+            stop_event.wait(1)
+
+        # 🔧 CORREÇÃO: Log quando thread parar
+        if not _rpa_running:
+            gui_log("🛑 [Thread Anti-Hibernação] Parada por _rpa_running=False")
+
+    # Iniciar thread em background
+    thread = threading.Thread(target=mover_mouse_loop, daemon=True)
+    thread.start()
+
+    return stop_event
+
+def aguardar_com_pausa(segundos, mensagem="Aguardando", evitar_hibernar=False):
+    """
+    Aguarda um tempo com possibilidade de interrupção
+
+    Args:
+        segundos: Tempo em segundos para aguardar
+        mensagem: Mensagem a exibir
+        evitar_hibernar: Se True, move o mouse periodicamente para evitar hibernação da tela
+    """
     gui_log(f"⏳ {mensagem} ({segundos}s)...")
+    if evitar_hibernar:
+        gui_log("🖱️ Movendo mouse periodicamente para evitar hibernação da tela...")
+
     inicio = time.time()
-    while time.sleep(0.5) or time.time() - inicio < segundos:
+    ultimo_movimento = time.time()
+
+    while time.time() - inicio < segundos:
         if not _rpa_running:
             return False
+
+        # Se evitar_hibernar está ativo, move o mouse a cada 5 segundos (mais agressivo)
+        if evitar_hibernar and (time.time() - ultimo_movimento) >= 5:
+            try:
+                if not MODO_TESTE:
+                    # Pega posição atual do mouse
+                    x_atual, y_atual = pyautogui.position()
+
+                    # SEGURANÇA: Se mouse estiver muito perto do canto (0,0) FAILSAFE, move para posição segura
+                    if x_atual < 100 or y_atual < 100:
+                        pyautogui.moveTo(400, 400, duration=0.1)
+                        gui_log(f"⚠️ Mouse estava perto do FAILSAFE ({x_atual}, {y_atual}) - movido para posição segura")
+                    else:
+                        # Move um pouco (5 pixels) e volta
+                        pyautogui.moveRel(5, 0, duration=0.1)
+                        pyautogui.moveRel(-5, 0, duration=0.1)
+
+                ultimo_movimento = time.time()
+                gui_log("🖱️ Mouse movido para evitar hibernação")
+            except Exception as e:
+                gui_log(f"⚠️ Erro ao mover mouse: {e}")
+                ultimo_movimento = time.time()
+
+        time.sleep(0.5)
+
     return True
+
+def aguardar_salvamento_concluido(timeout_travamento=120, intervalo_check=0.5):
+    """
+    Aguarda o salvamento ser concluído após Ctrl+S.
+
+    Verifica se a tela voltou ao estado correto (tela_transferencia_subinventory.png).
+
+    Lógica:
+    - Aguarda 5s após Ctrl+S
+    - Verifica se imagem da tela está correta
+    - Se NÃO: aguarda mais 30s e verifica novamente
+    - Se ainda NÃO: FALHOU ❌
+
+    Args:
+        timeout_travamento: Tempo máximo de espera (padrão: 120s) - NÃO USADO MAIS
+        intervalo_check: Intervalo entre verificações (padrão: 0.5s) - NÃO USADO MAIS
+
+    Returns:
+        tuple: (sucesso: bool, tipo_resultado: str, tempo_espera: float)
+
+        Tipos de resultado:
+        - "SALVO_OK": Tela voltou ao estado correto
+        - "TRAVADO": Tela não voltou após 2 tentativas (5s + 30s)
+        - "RPA_PARADO": Usuário apertou botão PARAR
+        - "QUEDA_REDE": Internet caiu
+        - "IMAGEM_NAO_EXISTE": Imagem de validação não existe
+    """
+    global _rpa_running
+
+    gui_log("⏳ [SALVAMENTO] Aguardando confirmação de salvamento...")
+    gui_log(f"   Método: DETECÇÃO DE IMAGEM (tela_transferencia_subinventory.png)")
+    gui_log(f"   Estratégia: 5s + (se falhar) 30s + (se falhar) ERRO")
+
+    caminho_tela_transferencia = os.path.join(base_path, "informacoes", "tela_transferencia_subinventory.png")
+
+    # Verificar se imagem existe
+    if not os.path.isfile(caminho_tela_transferencia):
+        gui_log(f"❌ [SALVAMENTO] Imagem não encontrada: {caminho_tela_transferencia}")
+        return False, "IMAGEM_NAO_EXISTE", 0.0
+
+    tempo_inicio = time.time()
+
+    # ═══════════════════════════════════════════════════════════════
+    # TENTATIVA 1: Verificar após 5 segundos
+    # ═══════════════════════════════════════════════════════════════
+    gui_log("⏳ [SALVAMENTO] Aguardando 5 segundos...")
+    time.sleep(5)
+
+    # Verificar se RPA foi parado
+    if not _rpa_running:
+        tempo_total = time.time() - tempo_inicio
+        gui_log(f"🛑 [SALVAMENTO] RPA PARADO pelo usuário após {tempo_total:.1f}s")
+        return False, "RPA_PARADO", tempo_total
+
+    # Verificar queda de rede
+    if verificar_queda_rede():
+        tempo_total = time.time() - tempo_inicio
+        gui_log(f"❌ [SALVAMENTO] QUEDA DE REDE detectada após {tempo_total:.1f}s")
+        return False, "QUEDA_REDE", tempo_total
+
+    gui_log("🔍 [SALVAMENTO] Verificando tela (tentativa 1/2)...")
+    tela_correta = detectar_imagem_opencv(caminho_tela_transferencia, confidence=0.8, timeout=3)
+
+    if tela_correta:
+        tempo_total = time.time() - tempo_inicio
+        gui_log(f"✅ [SALVAMENTO] Tela correta detectada! Salvamento confirmado em {tempo_total:.1f}s")
+        return True, "SALVO_OK", tempo_total
+
+    # ═══════════════════════════════════════════════════════════════
+    # TENTATIVA 2: Aguardar mais 30 segundos e verificar novamente
+    # ═══════════════════════════════════════════════════════════════
+    gui_log("⚠️ [SALVAMENTO] Tela não detectada na tentativa 1")
+    gui_log("⏳ [SALVAMENTO] Aguardando mais 30 segundos...")
+    time.sleep(30)
+
+    # Verificar se RPA foi parado
+    if not _rpa_running:
+        tempo_total = time.time() - tempo_inicio
+        gui_log(f"🛑 [SALVAMENTO] RPA PARADO pelo usuário após {tempo_total:.1f}s")
+        return False, "RPA_PARADO", tempo_total
+
+    # Verificar queda de rede
+    if verificar_queda_rede():
+        tempo_total = time.time() - tempo_inicio
+        gui_log(f"❌ [SALVAMENTO] QUEDA DE REDE detectada após {tempo_total:.1f}s")
+        return False, "QUEDA_REDE", tempo_total
+
+    gui_log("🔍 [SALVAMENTO] Verificando tela (tentativa 2/2)...")
+    tela_correta = detectar_imagem_opencv(caminho_tela_transferencia, confidence=0.8, timeout=3)
+
+    if tela_correta:
+        tempo_total = time.time() - tempo_inicio
+        gui_log(f"✅ [SALVAMENTO] Tela correta detectada! Salvamento confirmado em {tempo_total:.1f}s")
+        return True, "SALVO_OK", tempo_total
+
+    # ═══════════════════════════════════════════════════════════════
+    # FALHA: Tela não voltou ao estado correto
+    # ═══════════════════════════════════════════════════════════════
+    tempo_total = time.time() - tempo_inicio
+    gui_log(f"❌ [SALVAMENTO] FALHOU - Tela não voltou ao estado correto após {tempo_total:.1f}s")
+
+    # Notificar via Telegram
+    try:
+        if _telegram_notifier and _telegram_notifier.enabled:
+            _telegram_notifier.notificar_erro_critico(
+                f"TELA DIVERGENTE\n\n"
+                f"A tela não voltou ao estado esperado após salvamento.\n"
+                f"Tempo esperado: {tempo_total:.1f}s\n\n"
+                f"Verifique os arquivos debug_*.png para análise."
+            )
+    except:
+        pass
+
+    return False, "TRAVADO", tempo_total
+
+def detectar_imagem_opencv(caminho_imagem, confidence=0.8, timeout=5, salvar_debug=True):
+    """
+    Detecta imagem na tela usando OpenCV com MULTI-ESCALA
+    Procura a imagem mesmo se estiver em tamanho diferente
+
+    Args:
+        caminho_imagem: Caminho da imagem a ser detectada
+        confidence: Confiança mínima (0.0 a 1.0)
+        timeout: Tempo máximo de tentativas em segundos
+        salvar_debug: Se True, salva screenshots para debug
+
+    Returns:
+        bool: True se encontrou a imagem, False caso contrário
+    """
+    if not OPENCV_DISPONIVEL:
+        return False
+
+    if not os.path.isfile(caminho_imagem):
+        return False
+
+    try:
+        # Carregar a imagem de referência
+        template = cv2.imread(caminho_imagem)
+        if template is None:
+            return False
+
+        template_h, template_w = template.shape[:2]
+        nome_imagem = os.path.basename(caminho_imagem)
+
+        gui_log(f"[OPENCV] 🔍 Iniciando detecção de: {nome_imagem}")
+        gui_log(f"[OPENCV]    Dimensões template: {template_w}x{template_h}")
+        gui_log(f"[OPENCV]    Confiança mínima: {confidence:.2%}")
+
+        inicio = time.time()
+        tentativa = 0
+        ultima_screenshot = None
+        ultimo_template_usado = None
+        melhor_score_global = 0
+
+        while time.time() - inicio < timeout:
+            tentativa += 1
+
+            # Capturar screenshot da tela
+            screenshot = ImageGrab.grab()
+            screenshot_np = np.array(screenshot)
+            screenshot_bgr = cv2.cvtColor(screenshot_np, cv2.COLOR_RGB2BGR)
+
+            screen_h, screen_w = screenshot_bgr.shape[:2]
+
+            if tentativa == 1:
+                gui_log(f"[OPENCV]    Dimensões tela: {screen_w}x{screen_h}")
+
+            # Guardar screenshot para debug
+            ultima_screenshot = screenshot_bgr.copy()
+
+            # Verificar se template é maior que a tela
+            if template_w > screen_w or template_h > screen_h:
+                # Redimensionar template para caber na tela
+                scale = min(screen_w / template_w, screen_h / template_h) * 0.95
+                new_w = int(template_w * scale)
+                new_h = int(template_h * scale)
+                template_scaled = cv2.resize(template, (new_w, new_h))
+                if tentativa == 1:
+                    gui_log(f"[OPENCV] ⚠️ Template redimensionado: {template_w}x{template_h} -> {new_w}x{new_h}")
+            else:
+                template_scaled = template
+
+            ultimo_template_usado = template_scaled.copy()
+
+            # Fazer o template matching
+            result = cv2.matchTemplate(screenshot_bgr, template_scaled, cv2.TM_CCOEFF_NORMED)
+            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+
+            if max_val > melhor_score_global:
+                melhor_score_global = max_val
+
+            # Se a confiança for maior que o threshold
+            if max_val >= confidence:
+                gui_log(f"[OPENCV] ✅ Imagem detectada! Confiança: {max_val:.2%} (tentativa {tentativa})")
+
+                # Salvar debug apenas em caso de SUCESSO (se habilitado)
+                if salvar_debug:
+                    try:
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        debug_path_tela = f"debug_tela_atual_SUCESSO_{timestamp}.png"
+                        cv2.imwrite(debug_path_tela, ultima_screenshot)
+                        gui_log(f"[DEBUG] ✅ Tela salva em: {debug_path_tela}")
+                    except:
+                        pass
+
+                return True
+
+            # Se não encontrou mas template é diferente do tamanho da tela, tentar multi-escala
+            if max_val < confidence and (template_w != screen_w or template_h != screen_h):
+                # Tentar diferentes escalas
+                melhor_score = max_val
+                melhor_escala = 1.0
+
+                for escala in [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]:
+                    new_w = int(template_w * escala)
+                    new_h = int(template_h * escala)
+
+                    # Pular se ficar maior que a tela
+                    if new_w > screen_w or new_h > screen_h:
+                        continue
+
+                    template_test = cv2.resize(template, (new_w, new_h))
+                    result_test = cv2.matchTemplate(screenshot_bgr, template_test, cv2.TM_CCOEFF_NORMED)
+                    _, max_val_test, _, _ = cv2.minMaxLoc(result_test)
+
+                    if max_val_test > melhor_score:
+                        melhor_score = max_val_test
+                        melhor_escala = escala
+                        ultimo_template_usado = template_test.copy()
+
+                    if max_val_test >= confidence:
+                        gui_log(f"[OPENCV] ✅ Imagem detectada (escala {escala:.1f})! Confiança: {max_val_test:.2%}")
+
+                        # Salvar debug apenas em caso de SUCESSO (se habilitado)
+                        if salvar_debug:
+                            try:
+                                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                debug_path_tela = f"debug_tela_atual_SUCESSO_{timestamp}.png"
+                                cv2.imwrite(debug_path_tela, ultima_screenshot)
+                                gui_log(f"[DEBUG] ✅ Tela salva em: {debug_path_tela}")
+                            except:
+                                pass
+
+                        return True
+
+                if melhor_score > melhor_score_global:
+                    melhor_score_global = melhor_score
+
+                if tentativa == 1 or tentativa % 5 == 0:
+                    gui_log(f"[OPENCV] Tentativa {tentativa}: Melhor score = {melhor_score:.2%} (esperado >= {confidence:.2%})")
+
+            # Aguardar um pouco antes da próxima tentativa
+            time.sleep(0.3)
+
+        # ═══════════════════════════════════════════════════════════════
+        # NÃO ENCONTROU - SALVAR DEBUG
+        # ═══════════════════════════════════════════════════════════════
+        gui_log(f"[OPENCV] ❌ Imagem NÃO detectada após {timeout}s")
+        gui_log(f"[OPENCV] 📊 Melhor confiança alcançada: {melhor_score_global:.2%} (esperado >= {confidence:.2%})")
+
+        if salvar_debug and ultima_screenshot is not None:
+            try:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+                # Salvar tela capturada
+                debug_path_tela = f"debug_tela_atual_{timestamp}.png"
+                cv2.imwrite(debug_path_tela, ultima_screenshot)
+                gui_log(f"[DEBUG] 💾 Tela capturada salva: {debug_path_tela}")
+
+                # Salvar template usado
+                if ultimo_template_usado is not None:
+                    debug_path_template = f"debug_template_usado_{timestamp}.png"
+                    cv2.imwrite(debug_path_template, ultimo_template_usado)
+                    gui_log(f"[DEBUG] 💾 Template usado salvo: {debug_path_template}")
+
+                # Criar imagem comparativa lado a lado
+                try:
+                    # Redimensionar para mesma altura
+                    h1, w1 = ultima_screenshot.shape[:2]
+                    h2, w2 = ultimo_template_usado.shape[:2]
+
+                    if h1 > h2:
+                        scale = h1 / h2
+                        new_w2 = int(w2 * scale)
+                        template_resized = cv2.resize(ultimo_template_usado, (new_w2, h1))
+                        comparacao = np.hstack([ultima_screenshot, template_resized])
+                    else:
+                        scale = h2 / h1
+                        new_w1 = int(w1 * scale)
+                        screen_resized = cv2.resize(ultima_screenshot, (new_w1, h2))
+                        comparacao = np.hstack([screen_resized, ultimo_template_usado])
+
+                    debug_path_comp = f"debug_comparacao_{timestamp}.png"
+                    cv2.imwrite(debug_path_comp, comparacao)
+                    gui_log(f"[DEBUG] 💾 Comparação salva: {debug_path_comp}")
+                except Exception as e:
+                    gui_log(f"[DEBUG] ⚠️ Erro ao criar comparação: {e}")
+
+                gui_log(f"[DEBUG] 📁 Verifique os arquivos debug_*.png na pasta do executável")
+
+            except Exception as e:
+                gui_log(f"[DEBUG] ⚠️ Erro ao salvar debug: {e}")
+
+        return False
+
+    except Exception as e:
+        gui_log(f"[OPENCV] ⚠️ Erro na detecção: {e}")
+        import traceback
+        gui_log(f"[OPENCV] Stack: {traceback.format_exc()}")
+        return False
+
+def verificar_e_fechar_modal_qtd_negativa(timeout=3, fazer_ctrl_s=False):
+    """
+    Verifica se o modal de quantidade negativa apareceu e fecha com ENTER
+
+    Args:
+        timeout: Tempo máximo para procurar o modal (padrão: 3 segundos)
+        fazer_ctrl_s: Se True, faz Ctrl+S após fechar modal (padrão: False)
+
+    Returns:
+        bool: True se modal foi detectado e fechado, False caso contrário
+
+    IMPORTANTE: Quantidade negativa NÃO é erro! É uma operação válida.
+    O Oracle exibe um modal de CONFIRMAÇÃO que precisa ser fechado.
+    """
+    global _rpa_running
+
+    caminho = os.path.join(base_path, "informacoes", "qtd_negativa.png")
+
+    if not os.path.isfile(caminho):
+        return False
+
+    # Tentar detectar com OpenCV (múltiplas tentativas durante timeout)
+    encontrado = detectar_imagem_opencv(caminho, confidence=0.75, timeout=timeout)
+
+    if encontrado:
+        gui_log("✅ [QTD NEG] Modal de confirmação detectado!")
+
+        # Aguardar 0.5 segundos antes de pressionar Enter
+        time.sleep(0.5)
+
+        gui_log("[QTD NEG] >> Pressionando ENTER (fechar modal)...")
+        pyautogui.press("enter")
+        gui_log("[QTD NEG] << ENTER pressionado")
+
+        # Aguardar 1 segundo para o modal fechar
+        time.sleep(1)
+
+        if fazer_ctrl_s:
+            gui_log("[QTD NEG] >> Pressionando CTRL+S (salvar)...")
+            pyautogui.hotkey("ctrl", "s")
+            gui_log("[QTD NEG] << CTRL+S pressionado")
+            time.sleep(1)
+            gui_log("✅ [QTD NEG] Modal fechado e registro salvo!")
+        else:
+            gui_log("✅ [QTD NEG] Modal fechado! Continuando preenchimento...")
+
+        return True
+    else:
+        return False
+
+def tratar_erro_oracle():
+    """
+    DEPRECATED - Use verificar_e_fechar_modal_qtd_negativa() com fazer_ctrl_s=True
+
+    Mantido para compatibilidade - chama a nova função
+    """
+    gui_log("[QTD NEG] 🔍 Verificando modal após Ctrl+S...")
+    if verificar_e_fechar_modal_qtd_negativa(timeout=5, fazer_ctrl_s=True):
+        gui_log("✅ [QTD NEG] Quantidade negativa confirmada e salva com sucesso!")
+    else:
+        gui_log("[QTD NEG] ✅ Nenhum modal de confirmação detectado")
+
+def verificar_erro_produto(service, range_str, linha_atual):
+    """
+    Verifica se há erro de produto (ErroProduto.png) que PARA a aplicação
+    Usa OpenCV para detecção mais confiável
+
+    Returns:
+        bool: True se detectou erro de produto (aplicação deve parar)
+    """
+    global _rpa_running
+
+    erro_produto_path = os.path.join(base_path, "informacoes", "ErroProduto.png")
+
+    if not os.path.isfile(erro_produto_path):
+        return False
+
+    # Detectar com OpenCV (timeout de 3 segundos, confidence 0.8 igual RPA_Oracle)
+    encontrado = detectar_imagem_opencv(erro_produto_path, confidence=0.8, timeout=3)
+
+    if encontrado:
+        gui_log("⚠️ [ERRO PRODUTO] DETECTADO erro de produto!")
+
+        # Atualizar status no Sheets
+        try:
+            service.spreadsheets().values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=range_str,
+                valueInputOption="RAW",
+                body={"values": [["PD"]]}
+            ).execute()
+            gui_log(f"[ERRO] Linha {linha_atual} marcada como 'PD' (pendente) por erro detectado.")
+        except:
+            pass
+
+        _rpa_running = False
+        gui_log("🛑 [ERRO PRODUTO] Detectado - Robô parado!")
+        return True
+
+    return False
+
+def verificar_queda_rede():
+    """
+    Verifica se houve queda de rede/internet
+    Se detectar queda_rede.png, PARA o robô imediatamente
+
+    Returns:
+        bool: True se detectou queda de rede (aplicação deve parar)
+    """
+    global _rpa_running
+
+    caminho_queda_rede = os.path.join(base_path, "informacoes", "queda_rede.png")
+
+    if not os.path.isfile(caminho_queda_rede):
+        return False
+
+    # Detectar com OpenCV (timeout curto - 1s)
+    encontrado = detectar_imagem_opencv(caminho_queda_rede, confidence=0.8, timeout=1)
+
+    if encontrado:
+        gui_log("=" * 70)
+        gui_log("❌❌❌ [QUEDA DE REDE] DETECTADA! ❌❌❌")
+        gui_log("=" * 70)
+        gui_log("🌐 Internet caiu ou conexão perdida com servidor!")
+        gui_log("🛑 PARANDO ROBÔ IMEDIATAMENTE!")
+        gui_log("⚠️ Verifique sua conexão de internet antes de reiniciar")
+        gui_log("=" * 70)
+
+        # Parar flag do RPA
+        _rpa_running = False
+
+        # IMPORTANTE: Raise exception para forçar parada IMEDIATA
+        # Isso garante que o RPA pare independente de onde estiver no código
+        raise Exception("QUEDA DE REDE DETECTADA - Robô parado por segurança")
+
+    return False
+
+def verificar_tempo_oracle_rapido():
+    """
+    Verificação RÁPIDA de timeout do Oracle (sem logs detalhados).
+    Usada em loops e pontos frequentes.
+
+    Returns:
+        bool: True se detectou timeout do Oracle (aplicação deve parar)
+    """
+    global _rpa_running
+
+    # Procurar em ambos os caminhos
+    caminho_raiz = os.path.join(base_path, "tempo_oracle.png")
+    caminho_info = os.path.join(base_path, "informacoes", "tempo_oracle.png")
+
+    caminho_tempo_oracle = caminho_raiz if os.path.isfile(caminho_raiz) else caminho_info
+
+    if os.path.isfile(caminho_tempo_oracle):
+        try:
+            encontrado = pyautogui.locateOnScreen(caminho_tempo_oracle, confidence=0.8)
+            if encontrado:
+                gui_log("⏱️⏱️⏱️ [TIMEOUT ORACLE] DETECTADO! Sistema Oracle expirou!")
+                gui_log("🛑 PARANDO A APLICAÇÃO - O sistema Oracle deve ser REABERTO!")
+                _rpa_running = False
+                return True
+        except:
+            pass
+
+    return False
+
+def verificar_tempo_oracle(service, range_str, linha_atual):
+    """
+    Verifica se há timeout do Oracle (tempo_oracle.png) que PARA a aplicação
+
+    Args:
+        service: Serviço do Google Sheets
+        range_str: Range da célula Status Oracle
+        linha_atual: Número da linha atual
+
+    Returns:
+        bool: True se detectou timeout do Oracle (aplicação deve parar)
+    """
+    global _rpa_running
+
+    # Procurar em ambos os caminhos
+    caminho_raiz = os.path.join(base_path, "tempo_oracle.png")
+    caminho_info = os.path.join(base_path, "informacoes", "tempo_oracle.png")
+
+    caminho_tempo_oracle = caminho_raiz if os.path.isfile(caminho_raiz) else caminho_info
+
+    gui_log(f"[TEMPO_ORACLE] Verificando tempo_oracle.png...")
+    gui_log(f"[TEMPO_ORACLE] Caminho raiz: {caminho_raiz} - Existe: {os.path.isfile(caminho_raiz)}")
+    gui_log(f"[TEMPO_ORACLE] Caminho info: {caminho_info} - Existe: {os.path.isfile(caminho_info)}")
+    gui_log(f"[TEMPO_ORACLE] Usando: {caminho_tempo_oracle}")
+
+    if os.path.isfile(caminho_tempo_oracle):
+        try:
+            gui_log("[TEMPO_ORACLE] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            gui_log("[TEMPO_ORACLE] Iniciando verificação de timeout do Oracle...")
+
+            # Salvar screenshot ANTES de procurar (para debug)
+            try:
+                screenshot_path = "debug_tempo_oracle_tela.png"
+                from PIL import ImageGrab
+                screenshot = ImageGrab.grab()
+                screenshot.save(screenshot_path)
+                gui_log(f"[TEMPO_ORACLE] 📸 Screenshot salvo: {screenshot_path}")
+            except Exception as e_screenshot:
+                gui_log(f"[TEMPO_ORACLE] ⚠️ Não conseguiu salvar screenshot: {e_screenshot}")
+
+            gui_log(f"[TEMPO_ORACLE] 🔍 Procurando imagem na tela (confidence=0.8)...")
+            gui_log(f"[TEMPO_ORACLE] 📂 Caminho da imagem: {caminho_tempo_oracle}")
+
+            encontrado = None
+            try:
+                encontrado = pyautogui.locateOnScreen(caminho_tempo_oracle, confidence=0.8)
+                gui_log(f"[TEMPO_ORACLE] 🔎 Resultado da busca: {encontrado}")
+            except Exception as e_locate:
+                gui_log(f"[TEMPO_ORACLE] ⚠️ Exceção no locateOnScreen: {type(e_locate).__name__}: {e_locate}")
+                import traceback
+                gui_log(f"[TEMPO_ORACLE] Traceback:\n{traceback.format_exc()}")
+
+            if encontrado:
+                gui_log("[TEMPO_ORACLE] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                gui_log(f"[TEMPO_ORACLE] ⚠️⚠️⚠️ IMAGEM ENCONTRADA NA TELA! ⚠️⚠️⚠️")
+                gui_log("[TEMPO_ORACLE] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                gui_log(f"[TEMPO_ORACLE] 📍 Localização completa: {encontrado}")
+                gui_log(f"[TEMPO_ORACLE] 📊 Detalhes:")
+                gui_log(f"[TEMPO_ORACLE]    - left (X): {encontrado.left}")
+                gui_log(f"[TEMPO_ORACLE]    - top (Y): {encontrado.top}")
+                gui_log(f"[TEMPO_ORACLE]    - width: {encontrado.width}")
+                gui_log(f"[TEMPO_ORACLE]    - height: {encontrado.height}")
+                gui_log("[TEMPO_ORACLE] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                gui_log("⏱️ [TIMEOUT ORACLE] Detectado TIMEOUT DO ORACLE!")
+                gui_log("🛑 O sistema Oracle deve ser REABERTO!")
+                gui_log("🛑 PARANDO A APLICAÇÃO conforme solicitado")
+
+                # Marcar linha como "Timeout Oracle - Reabrir sistema" no Google Sheets
+                try:
+                    gui_log(f"[TEMPO_ORACLE] 📝 Marcando linha {linha_atual} como 'Timeout Oracle - Reabrir sistema'...")
+                    service.spreadsheets().values().update(
+                        spreadsheetId=SPREADSHEET_ID,
+                        range=range_str,
+                        valueInputOption="RAW",
+                        body={"values": [["Timeout Oracle - Reabrir sistema"]]}
+                    ).execute()
+                    gui_log(f"[TEMPO_ORACLE] ✅ Linha {linha_atual} marcada como 'Timeout Oracle - Reabrir sistema'")
+                except Exception as err_up:
+                    gui_log(f"[TEMPO_ORACLE] ⚠️ Erro ao marcar linha {linha_atual} no Sheets: {err_up}")
+                    import traceback
+                    gui_log(f"[TEMPO_ORACLE] Traceback Sheets:\n{traceback.format_exc()}")
+
+                # PARAR A APLICAÇÃO
+                gui_log("[TEMPO_ORACLE] 🛑 Definindo _rpa_running = False...")
+                _rpa_running = False
+                gui_log("[TEMPO_ORACLE] 🛑 Aplicação será parada!")
+                gui_log("[TEMPO_ORACLE] 🔄 AÇÃO NECESSÁRIA: Reabra o sistema Oracle e execute novamente")
+                return True
+            else:
+                gui_log("[TEMPO_ORACLE] ✅ Nenhum timeout detectado (imagem não encontrada)")
+                gui_log("[TEMPO_ORACLE] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        except Exception as e:
+            gui_log("[TEMPO_ORACLE] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            gui_log(f"[TEMPO_ORACLE] ❌ EXCEÇÃO CAPTURADA: {type(e).__name__}: {e}")
+            import traceback
+            gui_log(f"[TEMPO_ORACLE] Traceback completo:\n{traceback.format_exc()}")
+            gui_log("[TEMPO_ORACLE] ✅ Continuando normalmente (tratando como 'não encontrado')")
+            gui_log("[TEMPO_ORACLE] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            pass
+    else:
+        gui_log("[TEMPO_ORACLE] ❌ Arquivo tempo_oracle.png NÃO ENCONTRADO em nenhum caminho!")
+
+    return False
 
 # =================== ETAPAS DO PROCESSO ===================
 def etapa_01_transferencia_subinventario(config):
@@ -709,7 +1576,7 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
         gui_log(f"💾 Cache carregado: {len(cache.dados)} itens processados anteriormente")
         gui_log(f"📂 Arquivo de cache: {cache.arquivo}")
 
-        # Coordenadas dos campos no Oracle
+        # Coordenadas dos campos no Oracle (para digitação - apenas x, y)
         coords = {
             "item": (101, 156),
             "sub_origem": (257, 159),
@@ -720,12 +1587,46 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
             "Referencia": (768, 159),
         }
 
+        # Coordenadas completas para validação híbrida (x, y, largura, altura)
+        coords_validacao = {}
+        if "campos_oracle_validacao" in config:
+            campos_val = config["campos_oracle_validacao"]
+            gui_log("✅ Coordenadas de validação carregadas do config.json")
+            coords_validacao = {
+                "campo_item": tuple(campos_val["campo_item"]),
+                "campo_quantidade": tuple(campos_val["campo_quantidade"]),
+                "campo_referencia": tuple(campos_val["campo_referencia"]),
+                "campo_sub_o": tuple(campos_val["campo_sub_o"]),
+                "campo_end_o": tuple(campos_val["campo_end_o"]),
+                "campo_sub_d": tuple(campos_val["campo_sub_d"]),
+                "campo_end_d": tuple(campos_val["campo_end_d"]),
+            }
+        else:
+            # Fallback: usar coordenadas hardcoded (caso config.json esteja desatualizado)
+            gui_log("⚠️ Usando coordenadas padrão (config.json antigo)")
+            coords_validacao = {
+                "campo_item": (67, 155, 118, 22),
+                "campo_quantidade": (639, 155, 89, 22),
+                "campo_referencia": (737, 155, 100, 22),
+                "campo_sub_o": (208, 155, 101, 22),
+                "campo_end_o": (316, 155, 101, 22),
+                "campo_sub_d": (422, 155, 103, 22),
+                "campo_end_d": (530, 155, 100, 22),
+            }
+
         # Loop de espera até encontrar pelo menos 1 item para processar
         itens_processados = 0
         tentativas_verificacao = 0
         MAX_TENTATIVAS_PRIMEIRO_CICLO = 2  # Apenas 2 tentativas no primeiro ciclo
 
         while itens_processados == 0 and _rpa_running:
+            # ═══════════════════════════════════════════════════════════════
+            # 🔍 VERIFICAR TIMEOUT DO ORACLE (INÍCIO DO LOOP)
+            # ═══════════════════════════════════════════════════════════════
+            if verificar_tempo_oracle_rapido():
+                gui_log("⏱️ TIMEOUT ORACLE DETECTADO no início do loop. Parando RPA.")
+                return False
+
             tentativas_verificacao += 1
 
             # Buscar linhas para processar (Status = "CONCLUÍDO" e Status Oracle vazio)
@@ -753,20 +1654,131 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
                 gui_log(f"📋 Headers disponíveis: {', '.join(headers[:10])}... (total: {len(headers)})")
 
             # Filtrar linhas para processar
-            # 🔒 TRAVA 4: Ignorar linhas com "PROCESSANDO..." (Lock temporário)
+            # 🔒 TRAVA 4: Ignorar linhas com "PROCESSANDO..." APENAS se estiverem no cache
             linhas_processar = []
             for i, row in enumerate(dados):
                 if len(row) < len(headers):
                     row += [''] * (len(headers) - len(row))
                 idx_status_oracle = headers.index("Status Oracle")
                 idx_status = headers.index("Status")
+                idx_id = headers.index("ID") if "ID" in headers else -1
+
                 status_oracle = row[idx_status_oracle].strip()
                 status = row[idx_status].strip().upper()
+                id_linha_temp = row[idx_id].strip() if idx_id >= 0 and len(row) > idx_id else f"linha_{i+2}"
 
-                # Só processa se Status Oracle estiver VAZIO (não "PROCESSANDO...", não "Concluído", etc)
-                # E Status contém "CONCLUÍDO"
+                # Só processa se:
+                # 1. Status Oracle estiver VAZIO E Status contém "CONCLUÍDO"
+                # 2. OU Status Oracle = "Erro OCR - Tentar novamente" (retry de erros de OCR)
+                # 3. OU Status Oracle = "PROCESSANDO..." MAS NÃO está no cache (retry de timeouts/crashes)
+                # 4. OU Status Oracle = "Timeout Oracle - Reabrir sistema" (retry após reabrir)
+                # 5. OU Status Oracle = mensagens de erro que precisam retry
+                processar = False
+                motivo = ""
+
+                # Lista de mensagens de erro que permitem retry
+                # IMPORTANTE: "Tela incorreta" NÃO está aqui porque PARA o robô
+                # Mas permite retry na PRÓXIMA EXECUÇÃO (não adiciona ao cache)
+                mensagens_erro_retry = [
+                    # Erros gerais
+                    "Campo vazio encontrado",
+                    "Transação não autorizada",
+                    "Não concluído no Oracle",
+
+                    # Erros de dados
+                    "Erro Oracle: dados faltantes por item não cadastrado",
+                    "Dados não conferem",
+                    "OCR - Dados não conferem",
+
+                    # Erros de validação
+                    "Erro validação: valor divergente",
+                    "Erro OCR",
+                    "Erro OCR - Tentar novamente",
+                    "CAMPO_VAZIO",
+
+                    # Erros de salvamento
+                    "Sistema travado no Ctrl+S",
+                    "Timeout salvamento",
+                    "Erro salvamento"
+                ]
+
+                # ═══════════════════════════════════════════════════════════════
+                # 🚫 FILTRO: Ignorar linhas com Quantidade = 0 (Quantidade Zero)
+                # ═══════════════════════════════════════════════════════════════
+                idx_quantidade = headers.index("Quantidade") if "Quantidade" in headers else -1
+                quantidade_valor = None
+                if idx_quantidade >= 0 and len(row) > idx_quantidade:
+                    try:
+                        quantidade_valor = float(row[idx_quantidade])
+                    except:
+                        quantidade_valor = None
+
+                # Se quantidade for ZERO, NÃO processar (mesmo com erro de retry)
+                if quantidade_valor is not None and quantidade_valor == 0:
+                    # Linha com quantidade zero - IGNORAR completamente
+                    continue
+
+                # ═══════════════════════════════════════════════════════════════
+                # 🚫 FILTRO: Ignorar linhas com "REVER" no Status Oracle
+                # ═══════════════════════════════════════════════════════════════
+                if "REVER" in status_oracle.upper():
+                    # Linha marcada como REVER - NÃO REPROCESSAR
+                    continue
+
                 if status_oracle == "" and "CONCLUÍDO" in status:
-                    linhas_processar.append((i + 2, dict(zip(headers, row))))
+                    processar = True
+                    motivo = "Status vazio + Concluído"
+                elif status_oracle == "Erro OCR - Tentar novamente":
+                    processar = True
+                    motivo = "Retry de erro OCR"
+                elif status_oracle == "Timeout Oracle - Reabrir sistema":
+                    # Retry de timeout Oracle (mas vai PARAR quando processar)
+                    processar = True
+                    motivo = "Retry após timeout Oracle (sistema reaberto)"
+                    gui_log(f"🔄 [RETRY] Linha {i+2} (ID: {id_linha_temp}) com timeout Oracle - será reprocessada")
+                elif "Tela incorreta" in status_oracle or "tela incorreta" in status_oracle.lower():
+                    # Retry de erro de tela incorreta (mas vai PARAR quando processar)
+                    processar = True
+                    motivo = "Retry de erro de tela incorreta (corrigido manualmente)"
+                    gui_log(f"🔄 [RETRY] Linha {i+2} (ID: {id_linha_temp}) com erro de tela - será reprocessada")
+                elif status_oracle in mensagens_erro_retry:
+                    # Match exato
+                    processar = True
+                    motivo = f"Retry de erro: {status_oracle}"
+                    gui_log(f"🔄 [RETRY] Linha {i+2} (ID: {id_linha_temp}) com erro '{status_oracle}' - será reprocessada")
+                elif any(erro in status_oracle for erro in mensagens_erro_retry):
+                    # 🔧 CORREÇÃO: Match parcial (CONTÉM alguma palavra-chave de erro)
+                    processar = True
+                    motivo = f"Retry de erro (parcial): {status_oracle}"
+                    gui_log(f"🔄 [RETRY] Linha {i+2} (ID: {id_linha_temp}) com erro '{status_oracle}' - será reprocessada")
+                elif status_oracle == "PROCESSANDO...":
+                    # Verificar se está no cache
+                    if not cache.ja_processado(id_linha_temp):
+                        processar = True
+                        motivo = "PROCESSANDO mas não está no cache (retry de crash/timeout)"
+                        gui_log(f"🔄 [RETRY] Linha {i+2} (ID: {id_linha_temp}) está PROCESSANDO mas não está no cache - será reprocessada")
+                    else:
+                        gui_log(f"⏭️ [SKIP] Linha {i+2} (ID: {id_linha_temp}) está PROCESSANDO e está no cache - atualizando status")
+
+                        # Atualizar status no Google Sheets para "Processo Oracle Concluído"
+                        try:
+                            coluna_letra = indice_para_coluna(idx_status_oracle)
+                            range_str = f"{SHEET_NAME}!{coluna_letra}{i+2}"
+
+                            service.spreadsheets().values().update(
+                                spreadsheetId=SPREADSHEET_ID,
+                                range=range_str,
+                                valueInputOption="RAW",
+                                body={"values": [["Processo Oracle Concluído"]]}
+                            ).execute()
+                            gui_log(f"✅ Status atualizado no Sheets: 'Processo Oracle Concluído' (linha {i+2})")
+                        except Exception as e_update:
+                            gui_log(f"❌ ERRO ao atualizar status de item em cache (linha {i+2}): {e_update}")
+
+                if processar:
+                    linha_dict = dict(zip(headers, row))
+                    linhas_processar.append((i + 2, linha_dict))
+                    gui_log(f"✅ Linha {i+2} adicionada para processar - Motivo: {motivo}")
 
             if not linhas_processar:
                 gui_log(f"⏳ Nenhuma linha nova para processar (verificação #{tentativas_verificacao})")
@@ -824,9 +1836,95 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
                 else:
                     gui_log(f"✅ Linha {i}: Usando ID = {id_linha}")
 
+                # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                # 📊 MOSTRAR TODOS OS DADOS QUE SERÃO INSERIDOS
+                # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                gui_log("=" * 70)
+                gui_log(f"📋 DADOS DA LINHA {i} DO GOOGLE SHEETS:")
+                gui_log("=" * 70)
+                gui_log(f"  🔹 Linha no Sheets: {i}")
+                gui_log(f"  🔹 ID: {id_linha}")
+                gui_log(f"  🔹 Item: {item}")
+                gui_log(f"  🔹 Sub.Origem: {sub_o}")
+                gui_log(f"  🔹 End. Origem: {end_o}")
+                gui_log(f"  🔹 Sub. Destino: {sub_d}")
+                gui_log(f"  🔹 End. Destino: {end_d}")
+                gui_log(f"  🔹 Quantidade: {quantidade}")
+                gui_log(f"  🔹 Cód Referencia: {referencia}")
+                gui_log("=" * 70)
+
+                # Notificar início do item no Telegram
+                if _telegram_notifier:
+                    try:
+                        if _telegram_notifier.enabled:
+                            resultado = _telegram_notifier.notificar_inicio_item(i, item, quantidade, sub_o, sub_d)
+                            gui_log(f"📱 [TELEGRAM] Notificação de início enviada: {resultado}")
+                        else:
+                            gui_log("⚠️ [TELEGRAM] Notificador desabilitado (token/chat_id não configurados)")
+                    except Exception as e:
+                        gui_log(f"⚠️ [TELEGRAM] Erro ao notificar início: {e}")
+                else:
+                    gui_log("⚠️ [TELEGRAM] Notificador não inicializado")
+
+                # ═══════════════════════════════════════════════════════════════
+                # 🔍 VERIFICAR TIMEOUT DO ORACLE (ANTES DE PROCESSAR ITEM)
+                # ═══════════════════════════════════════════════════════════════
+                gui_log("🔍 Verificando timeout do Oracle antes de processar item...")
+                if verificar_tempo_oracle_rapido():
+                    gui_log("⏱️ TIMEOUT DETECTADO! Parando antes de processar este item.")
+                    # Marcar linha no Sheets
+                    try:
+                        idx_status_oracle = headers.index("Status Oracle")
+                        coluna_letra = indice_para_coluna(idx_status_oracle)
+                        range_str = f"{SHEET_NAME}!{coluna_letra}{i}"
+                        service.spreadsheets().values().update(
+                            spreadsheetId=SPREADSHEET_ID,
+                            range=range_str,
+                            valueInputOption="RAW",
+                            body={"values": [["Timeout Oracle - Reabrir sistema"]]}
+                        ).execute()
+                        gui_log(f"✅ Linha {i} marcada como 'Timeout Oracle - Reabrir sistema'")
+                    except:
+                        pass
+                    return False
+
                 # ✅ VERIFICAR CACHE ANTI-DUPLICAÇÃO
                 if cache.ja_processado(id_linha):
                     gui_log(f"⏭️ Linha {i} (ID: {id_linha}) já processada anteriormente. Pulando.")
+
+                    # Atualizar status no Google Sheets para indicar que foi pulado
+                    try:
+                        idx_status_oracle = headers.index("Status Oracle")
+                        coluna_letra = indice_para_coluna(idx_status_oracle)
+                        range_str = f"{SHEET_NAME}!{coluna_letra}{i}"
+
+                        gui_log(f"[CACHE SKIP] Tentando atualizar linha {i}, coluna {coluna_letra}")
+                        gui_log(f"[CACHE SKIP] Range: {range_str}")
+                        gui_log(f"[CACHE SKIP] Spreadsheet ID: {SPREADSHEET_ID}")
+
+                        service.spreadsheets().values().update(
+                            spreadsheetId=SPREADSHEET_ID,
+                            range=range_str,
+                            valueInputOption="RAW",
+                            body={"values": [["Processo Oracle Concluído"]]}
+                        ).execute()
+                        gui_log(f"✅ Status atualizado no Sheets: 'Processo Oracle Concluído' (linha {i})")
+
+                        # Notificar skip no Telegram
+                        if _telegram_notifier:
+                            try:
+                                _telegram_notifier.notificar_skip_item(i, item, "Já processado anteriormente (encontrado no cache)")
+                            except:
+                                pass
+
+                    except Exception as e_cache_skip:
+                        import traceback
+                        gui_log(f"❌ ERRO ao atualizar status de item em cache:")
+                        gui_log(f"   Tipo do erro: {type(e_cache_skip).__name__}")
+                        gui_log(f"   Mensagem: {e_cache_skip}")
+                        gui_log(f"   Traceback completo:")
+                        gui_log(traceback.format_exc())
+
                     continue
 
                 # 🔒 TRAVA 4: LOCK TEMPORÁRIO - Marcar como "PROCESSANDO..." antes de processar
@@ -835,6 +1933,15 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
                     idx_status_oracle = headers.index("Status Oracle")
                     coluna_letra = indice_para_coluna(idx_status_oracle)
                     range_str = f"{SHEET_NAME}!{coluna_letra}{i}"
+
+                    # Verificar se já estava como PROCESSANDO (retry de crash/timeout)
+                    status_atual = linha.get("Status Oracle", "").strip()
+                    if status_atual == "PROCESSANDO...":
+                        gui_log(f"🔄 [RETRY] Linha {i} estava como PROCESSANDO mas não está no cache - REPROCESSANDO")
+                    elif status_atual == "Timeout Oracle - Reabrir sistema":
+                        gui_log(f"🔄 [RETRY] Linha {i} com timeout - REPROCESSANDO após reabrir Oracle")
+                    elif status_atual == "Erro OCR - Tentar novamente":
+                        gui_log(f"🔄 [RETRY] Linha {i} com erro OCR - REPROCESSANDO")
 
                     gui_log(f"🔒 [LOCK] Marcando linha {i} como 'PROCESSANDO...' (coluna {coluna_letra})")
                     service.spreadsheets().values().update(
@@ -860,7 +1967,7 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
                     ).execute()
                     continue
 
-                # REGRA 1: Validar quantidade = 0
+                # REGRA 1: Validar quantidade = 0 (IMPORTANTE: quantidade negativa é PERMITIDA)
                 try:
                     qtd_float = float(str(quantidade).replace(",", ".").replace(" ", ""))
                     if qtd_float == 0:
@@ -872,8 +1979,9 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
                             body={"values": [["Quantidade Zero"]]}
                         ).execute()
                         continue
+                    # ✅ QUANTIDADE NEGATIVA É PERMITIDA - Oracle apenas pede confirmação
                     if qtd_float < 0:
-                        continue
+                        gui_log(f"ℹ️ Linha {i} - Quantidade NEGATIVA ({quantidade}) - será processada normalmente")
                 except ValueError:
                     continue
 
@@ -906,6 +2014,11 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
 
                 gui_log(f"▶ Linha {i}: {item} | Qtd={quantidade} | Ref={referencia}")
 
+                # 🌐 VERIFICAR QUEDA DE REDE NO INÍCIO DO PROCESSAMENTO
+                if verificar_queda_rede():
+                    gui_log("❌ QUEDA DE REDE detectada no início do processamento da linha!")
+                    return False
+
                 # 🔒 TRAVA 5: TIMEOUT DE SEGURANÇA - Registrar início do processamento
                 inicio_processamento = time.time()
                 TIMEOUT_PROCESSAMENTO = 60  # 60 segundos por linha
@@ -914,175 +2027,655 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
                     gui_log("[MODO TESTE] Simulando preenchimento no Oracle (sem pyautogui)...")
                     time.sleep(0.5)  # Simula tempo de preenchimento
                 else:
-                    # Preencher Oracle
-                    pyautogui.click(coords["item"])
-                    pyautogui.press("delete")
-                    pyautogui.write(item)
-                    pyautogui.press("tab")
-                    time.sleep(1)
+                    # ═══════════════════════════════════════════════════════════════
+                    # 🖼️ VERIFICAR TELA DE TRANSFERÊNCIA SUBINVENTORY
+                    # ═══════════════════════════════════════════════════════════════
+                    gui_log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                    gui_log("🔍 VERIFICANDO TELA DE TRANSFERÊNCIA SUBINVENTORY...")
 
-                    pyautogui.click(coords["Referencia"])
-                    pyautogui.write(referencia)
-                    time.sleep(1)
+                    caminho_tela_transferencia = os.path.join(base_path, "informacoes", "tela_transferencia_subinventory.png")
 
-                    pyautogui.click(coords["sub_origem"])
-                    pyautogui.write(sub_o)
-                    pyautogui.press("tab")
-                    time.sleep(1)
-
-                    pyautogui.press("delete")
-                    pyautogui.click(coords["end_origem"])
-                    pyautogui.write(end_o)
-                    pyautogui.press("tab")
-                    time.sleep(1)
-
-                    # Se referência começa com "COD", pula destino
-                    if str(referencia).strip().upper().startswith("COD"):
-                        pyautogui.press("tab")
-                        time.sleep(1)
-                        pyautogui.press("tab")
-                        time.sleep(1)
+                    if not os.path.isfile(caminho_tela_transferencia):
+                        gui_log(f"⚠️ Imagem de validação não encontrada: {caminho_tela_transferencia}")
+                        gui_log("⚠️ CONTINUANDO sem verificação de tela (imagem não existe)")
                     else:
-                        pyautogui.press("delete")
-                        pyautogui.click(coords["sub_destino"])
-                        pyautogui.write(sub_d)
-                        pyautogui.press("tab")
-                        time.sleep(1)
+                        tela_correta = detectar_imagem_opencv(caminho_tela_transferencia, confidence=0.8, timeout=5)
 
-                        pyautogui.press("delete")
-                        pyautogui.click(coords["end_destino"])
-                        pyautogui.write(end_d)
-                        pyautogui.press("tab")
-                        time.sleep(1)
+                        if not tela_correta:
+                            gui_log("❌ TELA DE TRANSFERÊNCIA NÃO DETECTADA!")
+                            gui_log("❌ A tela atual NÃO corresponde à tela esperada de Transferência Subinventory")
+                            gui_log("🛑 PARANDO ROBÔ - Verifique se está na tela correta do Oracle")
 
-                    pyautogui.press("delete")
-                    pyautogui.click(coords["quantidade"])
-                    pyautogui.write(quantidade)
-                    time.sleep(1)
-
-                    # ═══════════════════════════════════════════════════════════════
-                    # 🔒 TRAVAS DE VALIDAÇÃO ANTES DO Ctrl+S
-                    # ═══════════════════════════════════════════════════════════════
-
-                    # 🔒 TRAVA 5: Verificar TIMEOUT
-                    tempo_decorrido = time.time() - inicio_processamento
-                    if tempo_decorrido > TIMEOUT_PROCESSAMENTO:
-                        gui_log(f"⏱️ [TIMEOUT] Linha {i} demorou {tempo_decorrido:.1f}s (limite: {TIMEOUT_PROCESSAMENTO}s)")
-                        gui_log(f"⚠️ [TIMEOUT] Abortando processamento da linha {i} por segurança")
-                        # Reverter lock
-                        try:
-                            service.spreadsheets().values().update(
-                                spreadsheetId=SPREADSHEET_ID,
-                                range=range_str,
-                                valueInputOption="RAW",
-                                body={"values": [["TIMEOUT - Verificar manualmente"]]}
-                            ).execute()
-                        except:
-                            pass
-                        continue  # Pula para próxima linha
-
-                    # 🔒 TRAVA 3: Validação de consistência dos dados digitados
-                    # Verificar se campos obrigatórios não estão vazios (dupla verificação)
-                    gui_log("🔍 [VALIDAÇÃO] Verificando consistência dos dados antes do Ctrl+S...")
-
-                    # Validar quantidade (não pode ser negativa ou zero após processamento)
-                    try:
-                        qtd_float = float(str(quantidade).replace(",", ".").replace(" ", ""))
-                        if qtd_float <= 0:
-                            gui_log(f"⚠️ [VALIDAÇÃO] Quantidade inválida detectada: {quantidade}")
-                            gui_log(f"⚠️ [VALIDAÇÃO] Abortando Ctrl+S para linha {i}")
-                            # Reverter lock
+                            # Atualizar status no Sheets
                             try:
                                 service.spreadsheets().values().update(
                                     spreadsheetId=SPREADSHEET_ID,
                                     range=range_str,
                                     valueInputOption="RAW",
-                                    body={"values": [["Quantidade inválida"]]}
+                                    body={"values": [["Tela incorreta - verificar Oracle"]]}
                                 ).execute()
-                            except:
-                                pass
-                            continue
-                    except ValueError:
-                        gui_log(f"⚠️ [VALIDAÇÃO] Quantidade não numérica: {quantidade}")
-                        continue
+                                gui_log(f"✅ Status atualizado no Sheets: 'Tela incorreta - verificar Oracle'")
+                            except Exception as e_tela:
+                                gui_log(f"⚠️ Erro ao atualizar status: {e_tela}")
 
-                    # Validar que campos críticos não estão vazios
-                    if not item.strip() or not sub_o.strip() or not end_o.strip():
-                        gui_log(f"⚠️ [VALIDAÇÃO] Campos críticos vazios detectados antes do Ctrl+S")
-                        continue
+                            gui_log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                            return False
+                        else:
+                            gui_log("✅ TELA CORRETA DETECTADA - Transferência Subinventory OK!")
 
-                    # Se não é COD, validar destino também
-                    if not str(referencia).strip().upper().startswith("COD"):
-                        if not sub_d.strip() or not end_d.strip():
-                            gui_log(f"⚠️ [VALIDAÇÃO] Campos de destino vazios (não é COD)")
-                            continue
+                    gui_log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-                    gui_log("✅ [VALIDAÇÃO] Todos os dados estão consistentes. Prosseguindo com Ctrl+S...")
+                    # ═══════════════════════════════════════════════════════════════
+                    # PREENCHER ITEM
+                    # ═══════════════════════════════════════════════════════════════
+                    gui_log(f"[ITEM] >> Clicando no campo Item: {coords['item']}")
+                    pyautogui.click(coords["item"])
+                    gui_log(f"[ITEM] << Click executado")
+                    gui_log(f"[ITEM] Aguardando 0.3 segundos...")
+                    time.sleep(0.3)
+                    gui_log(f"[ITEM] >> Pressionando DELETE...")
+                    pyautogui.press("delete")
+                    gui_log(f"[ITEM] << DELETE pressionado")
+                    gui_log(f"[ITEM] Aguardando 0.2 segundos...")
+                    time.sleep(0.2)
+                    gui_log(f"[ITEM] >> Digitando Item: '{item}'")
+                    pyautogui.write(item)
+                    gui_log(f"[ITEM] << Item digitado")
+                    gui_log(f"[ITEM] Aguardando 0.2 segundos...")
+                    time.sleep(0.2)
+                    gui_log(f"[ITEM] >> Pressionando TAB...")
+                    pyautogui.press("tab")
+                    gui_log(f"[ITEM] << TAB pressionado")
+                    gui_log(f"[ITEM] Aguardando 1 segundo...")
+                    time.sleep(1)
+                    gui_log(f"[ITEM] ✅ Item preenchido")
 
-                    # 🔒 TRAVA 2: Verificação visual na tela com OCR
-                    gui_log("👁️ [VISUAL] Iniciando verificação visual com OCR...")
-                    time.sleep(0.5)  # Pausa breve para estabilização da tela
+                    # ═══════════════════════════════════════════════════════════════
+                    # VERIFICAR ERRO DE PRODUTO (LOGO APÓS ITEM) - IGUAL RPA_ORACLE
+                    # ═══════════════════════════════════════════════════════════════
+                    gui_log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                    gui_log("🔍 INICIANDO VERIFICAÇÃO DE ERRO DE PRODUTO...")
+                    gui_log(f"📊 Contexto: Linha {i}, Item: {item}, Referência: {referencia}")
+                    gui_log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-                    # Validar campos usando OCR
-                    ocr_ok = validar_campos_oracle_ocr(
-                        coords, item, quantidade, referencia,
-                        sub_o, end_o, sub_d, end_d
-                    )
+                    erro_detectado = verificar_erro_produto(service, range_str, i)
 
-                    if not ocr_ok:
-                        gui_log("❌ [OCR] Validação visual falhou! Abortando Ctrl+S")
-                        # Reverter lock
+                    gui_log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                    gui_log(f"🔍 RESULTADO VERIFICAÇÃO: {erro_detectado}")
+                    gui_log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+                    if erro_detectado:
+                        gui_log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                        gui_log("❌❌❌ ERRO DE PRODUTO DETECTADO - APLICAÇÃO SERÁ PARADA ❌❌❌")
+                        gui_log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                        gui_log(f"📋 Linha {i} marcada como 'PD' (Pendente)")
+                        gui_log("🔄 Corrija o erro e execute novamente a aplicação")
+                        gui_log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                        return False
+                    else:
+                        gui_log("✅✅✅ Nenhum erro de produto - CONTINUANDO PROCESSAMENTO ✅✅✅")
+
+                    # ═══════════════════════════════════════════════════════════════
+                    # VERIFICAR TIMEOUT DO ORACLE (LOGO APÓS VERIFICAÇÃO DE ERRO)
+                    # ═══════════════════════════════════════════════════════════════
+                    gui_log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                    gui_log("🔍 INICIANDO VERIFICAÇÃO DE TIMEOUT DO ORACLE...")
+                    gui_log(f"📊 Contexto: Linha {i}, Item: {item}, Referência: {referencia}")
+                    gui_log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+                    timeout_detectado = verificar_tempo_oracle(service, range_str, i)
+
+                    gui_log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                    gui_log(f"🔍 RESULTADO VERIFICAÇÃO TIMEOUT: {timeout_detectado}")
+                    gui_log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+                    if timeout_detectado:
+                        gui_log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                        gui_log("⏱️⏱️⏱️ TIMEOUT DO ORACLE DETECTADO - APLICAÇÃO SERÁ PARADA ⏱️⏱️⏱️")
+                        gui_log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                        gui_log(f"📋 Linha {i} marcada como 'Timeout Oracle - Reabrir sistema'")
+                        gui_log("🔄 REABRA o sistema Oracle e execute novamente a aplicação")
+                        gui_log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                        return False
+                    else:
+                        gui_log("✅✅✅ Nenhum timeout detectado - CONTINUANDO PROCESSAMENTO ✅✅✅")
+
+                    # ═══════════════════════════════════════════════════════════════
+                    # PREENCHER REFERÊNCIA, SUB ORIGEM, END ORIGEM
+                    # ═══════════════════════════════════════════════════════════════
+                    gui_log(f"[REFERENCIA] >> Clicando em coords: {coords['Referencia']}")
+                    pyautogui.click(coords["Referencia"])
+                    gui_log(f"[REFERENCIA] << Click executado")
+                    gui_log(f"[REFERENCIA] >> Digitando '{referencia}'...")
+                    pyautogui.write(referencia)
+                    gui_log(f"[REFERENCIA] << Digitado")
+                    gui_log(f"[REFERENCIA] >> Pressionando TAB...")
+                    pyautogui.press("tab")
+                    gui_log(f"[REFERENCIA] << TAB pressionado")
+                    gui_log(f"[REFERENCIA] Aguardando 1 segundo...")
+                    time.sleep(1)
+
+                    gui_log(f"[SUB_ORIGEM] >> Clicando em coords: {coords['sub_origem']}")
+                    pyautogui.click(coords["sub_origem"])
+                    gui_log(f"[SUB_ORIGEM] << Click executado")
+                    gui_log(f"[SUB_ORIGEM] Aguardando 0.2 segundos...")
+                    time.sleep(0.2)
+                    gui_log(f"[SUB_ORIGEM] >> Digitando '{sub_o}'...")
+                    pyautogui.write(sub_o)
+                    gui_log(f"[SUB_ORIGEM] << Digitado")
+                    gui_log(f"[SUB_ORIGEM] >> Pressionando TAB...")
+                    pyautogui.press("tab")
+                    gui_log(f"[SUB_ORIGEM] << TAB pressionado")
+                    gui_log(f"[SUB_ORIGEM] Aguardando 1 segundo...")
+                    time.sleep(1)
+
+                    gui_log(f"[END_ORIGEM] >> Pressionando DELETE...")
+                    pyautogui.press("delete")
+                    gui_log(f"[END_ORIGEM] << DELETE pressionado")
+                    gui_log(f"[END_ORIGEM] >> Clicando em coords: {coords['end_origem']}")
+                    pyautogui.click(coords["end_origem"])
+                    gui_log(f"[END_ORIGEM] << Click executado")
+                    gui_log(f"[END_ORIGEM] Aguardando 0.2 segundos...")
+                    time.sleep(0.2)
+                    gui_log(f"[END_ORIGEM] >> Digitando '{end_o}'...")
+                    pyautogui.write(end_o)
+                    gui_log(f"[END_ORIGEM] << Digitado")
+                    gui_log(f"[END_ORIGEM] >> Pressionando TAB...")
+                    pyautogui.press("tab")
+                    gui_log(f"[END_ORIGEM] << TAB pressionado")
+                    time.sleep(1.5)  # Aumentar delay para Oracle processar
+
+                    # Verifica se referencia inicia com "COD"
+                    if str(referencia).strip().upper().startswith("COD"):
+                        gui_log(f"[COD] Referencia '{referencia}' detectada como tipo COD. Pulando campos destino.")
+                        if not MODO_TESTE:
+                            gui_log(f"[COD] Cursor deve estar em SUB_DESTINO. Dando TAB para pular...")
+                            pyautogui.press("tab")
+                            time.sleep(1.2)
+                            gui_log(f"[COD] Cursor deve estar em END_DESTINO. Dando TAB para pular...")
+                            pyautogui.press("tab")
+                            time.sleep(1.2)
+                            gui_log(f"[COD] Cursor deve estar em QUANTIDADE agora.")
+                        else:
+                            gui_log(f"[MODO TESTE] Simulando TAB TAB para COD...")
+                    else:
+                        gui_log(f"[MOV] Referencia '{referencia}' tratada como MOV. Preenchendo normalmente.")
+                        gui_log(f"[SUB_DESTINO] Preenchendo: {sub_d}")
+                        gui_log(f"[SUB_DESTINO] >> Pressionando DELETE...")
+                        pyautogui.press("delete")
+                        gui_log(f"[SUB_DESTINO] << DELETE pressionado")
+                        gui_log(f"[SUB_DESTINO] >> Clicando em coords: {coords['sub_destino']}")
+                        pyautogui.click(coords["sub_destino"])
+                        gui_log(f"[SUB_DESTINO] << Click executado")
+                        gui_log(f"[SUB_DESTINO] Aguardando 0.2 segundos...")
+                        time.sleep(0.2)
+                        gui_log(f"[SUB_DESTINO] >> Digitando '{sub_d}'...")
+                        pyautogui.write(sub_d)
+                        gui_log(f"[SUB_DESTINO] << Digitado")
+                        gui_log(f"[SUB_DESTINO] >> Pressionando TAB...")
+                        pyautogui.press("tab")
+                        gui_log(f"[SUB_DESTINO] << TAB pressionado")
+                        gui_log(f"[SUB_DESTINO] Aguardando 1 segundo...")
+                        time.sleep(1)
+                        gui_log(f"[SUB_DESTINO] ✅ Preenchido")
+
+                        gui_log(f"[END_DESTINO] Preenchendo: {end_d}")
+                        gui_log(f"[END_DESTINO] >> Pressionando DELETE...")
+                        pyautogui.press("delete")
+                        gui_log(f"[END_DESTINO] << DELETE pressionado")
+                        gui_log(f"[END_DESTINO] >> Clicando em coords: {coords['end_destino']}")
+                        pyautogui.click(coords["end_destino"])
+                        gui_log(f"[END_DESTINO] << Click executado")
+                        gui_log(f"[END_DESTINO] Aguardando 0.2 segundos...")
+                        time.sleep(0.2)
+                        gui_log(f"[END_DESTINO] >> Digitando '{end_d}'...")
+                        pyautogui.write(end_d)
+                        gui_log(f"[END_DESTINO] << Digitado")
+                        gui_log(f"[END_DESTINO] >> Pressionando TAB...")
+                        pyautogui.press("tab")
+                        gui_log(f"[END_DESTINO] << TAB pressionado")
+                        gui_log(f"[END_DESTINO] Aguardando 1 segundo...")
+                        time.sleep(1)
+                        gui_log(f"[END_DESTINO] ✅ Preenchido")
+
+                    # ═══════════════════════════════════════════════════════════════
+                    # PREENCHER QUANTIDADE
+                    # ═══════════════════════════════════════════════════════════════
+                    gui_log(f"[QUANTIDADE] Preenchendo quantidade: {quantidade}")
+                    gui_log("[QUANTIDADE] >> Pressionando DELETE...")
+                    pyautogui.press("delete")
+                    gui_log("[QUANTIDADE] << DELETE pressionado")
+                    gui_log(f"[QUANTIDADE] >> Clicando em coords quantidade: {coords['quantidade']}")
+                    pyautogui.click(coords["quantidade"])
+                    gui_log("[QUANTIDADE] << Click executado")
+                    gui_log("[QUANTIDADE] Aguardando 0.2 segundos...")
+                    time.sleep(0.2)
+                    gui_log(f"[QUANTIDADE] >> Digitando '{quantidade}'...")
+                    pyautogui.write(quantidade)
+                    gui_log("[QUANTIDADE] << Digitação concluída")
+
+                    # Pressionar TAB para sair do campo quantidade (ou clicar fora)
+                    gui_log("[QUANTIDADE] >> Pressionando TAB para sair do campo...")
+                    pyautogui.press("tab")
+                    gui_log("[QUANTIDADE] << TAB pressionado")
+
+                    gui_log("[QUANTIDADE] Aguardando 1 segundo...")
+                    time.sleep(1)
+                    gui_log(f"[QUANTIDADE] ✅ Quantidade preenchida")
+
+                    # ═══════════════════════════════════════════════════════════════
+                    # ⚠️ VERIFICAR MODAL #1 - AO SAIR DO CAMPO QUANTIDADE
+                    # O modal pode aparecer quando sai do foco do campo quantidade
+                    # Apenas fecha o modal com ENTER, NÃO faz Ctrl+S
+                    # Confidence 0.8 (80%) - IGUAL ao RPA_Oracle
+                    # ═══════════════════════════════════════════════════════════════
+                    gui_log("[QTD NEG] 🔍 Verificando modal após sair do campo quantidade...")
+                    caminho_modal = os.path.join(base_path, "informacoes", "qtd_negativa.png")
+                    if os.path.isfile(caminho_modal):
+                        modal_encontrado = detectar_imagem_opencv(caminho_modal, confidence=0.8, timeout=3)
+                        if modal_encontrado:
+                            gui_log("✅ [QTD NEG] Modal detectado ao sair do campo!")
+                            time.sleep(0.5)
+                            gui_log("[QTD NEG] >> Pressionando ENTER (fechar modal)...")
+                            pyautogui.press("enter")
+                            gui_log("[QTD NEG] << ENTER pressionado")
+                            time.sleep(1)
+                            gui_log("✅ [QTD NEG] Modal fechado! Continuando...")
+                        else:
+                            gui_log("[QTD NEG] ✅ Nenhum modal detectado")
+
+                    # ═══════════════════════════════════════════════════════════════
+                    # 🔍 VERIFICAR TIMEOUT (APÓS PREENCHER QUANTIDADE)
+                    # ═══════════════════════════════════════════════════════════════
+                    if verificar_tempo_oracle_rapido():
+                        gui_log("⏱️ TIMEOUT DETECTADO após preencher quantidade. Parando RPA.")
                         try:
                             service.spreadsheets().values().update(
                                 spreadsheetId=SPREADSHEET_ID,
                                 range=range_str,
                                 valueInputOption="RAW",
-                                body={"values": [["OCR - Dados não conferem"]]}
+                                body={"values": [["Timeout Oracle - Reabrir sistema"]]}
                             ).execute()
                         except:
                             pass
-                        continue  # Pula para próxima linha
+                        return False
 
                     # ═══════════════════════════════════════════════════════════════
-                    # ✅ TODAS AS VALIDAÇÕES PASSARAM - EXECUTAR Ctrl+S
+                    # 🔍 VALIDAÇÃO HÍBRIDA - Verificar se campos foram preenchidos
                     # ═══════════════════════════════════════════════════════════════
+                    if VALIDADOR_HIBRIDO_DISPONIVEL:
+                        gui_log("[VALIDADOR] ═══════════════════════════════════════════════")
 
-                    # Salvar (Ctrl+S)
-                    gui_log("💾 [CTRL+S] Executando salvamento no Oracle...")
+                        # 🌐 VERIFICAR QUEDA DE REDE ANTES DA VALIDAÇÃO
+                        if verificar_queda_rede():
+                            gui_log("❌ QUEDA DE REDE detectada antes da validação!")
+                            return False
+
+                        gui_log("[VALIDADOR] Aguardando 3 segundos para campos estabilizarem...")
+                        time.sleep(3)  # Timeout maior para dar tempo da tela estabilizar
+
+                        validacao_ok, tipo_erro = validar_campos_oracle_completo(
+                            coords_validacao, item, quantidade, referencia,
+                            sub_o, end_o, sub_d, end_d
+                        )
+
+                        # ═══════════════════════════════════════════════════════════════
+                        # ⚠️ VERIFICAR MODAL DE QUANTIDADE NEGATIVA (aparece DURANTE validação!)
+                        # O validador COPIA os valores dos campos, e nesse momento
+                        # o Oracle pode exibir o modal de quantidade negativa
+                        # Apenas fecha o modal com ENTER, NÃO faz Ctrl+S
+                        # Confidence 0.8 (80%) - IGUAL ao RPA_Oracle
+                        # ═══════════════════════════════════════════════════════════════
+                        gui_log("[QTD NEG] 🔍 Verificando se modal apareceu durante validação...")
+                        caminho_modal = os.path.join(base_path, "informacoes", "qtd_negativa.png")
+                        if os.path.isfile(caminho_modal):
+                            modal_encontrado = detectar_imagem_opencv(caminho_modal, confidence=0.8, timeout=3)
+                            if modal_encontrado:
+                                gui_log("✅ [QTD NEG] Modal de confirmação detectado durante validação!")
+                                time.sleep(0.5)
+                                gui_log("[QTD NEG] >> Pressionando ENTER (fechar modal)...")
+                                pyautogui.press("enter")
+                                gui_log("[QTD NEG] << ENTER pressionado")
+                                time.sleep(1)
+                                gui_log("✅ [QTD NEG] Modal fechado! Continuando validação...")
+                            else:
+                                gui_log("[QTD NEG] ✅ Nenhum modal detectado durante validação")
+
+                        if not validacao_ok:
+                            gui_log("❌ [VALIDADOR] Validação FALHOU - dados não conferem!")
+
+                            # Definir mensagem baseada no tipo de erro
+                            if tipo_erro == "COD_VAZIO" or tipo_erro == "CAMPO_VAZIO":
+                                mensagem_status = "Erro Oracle: dados faltantes por item não cadastrado"
+                                gui_log(f"[VALIDADOR] Tipo de erro: {tipo_erro} - campos vazios")
+                            elif tipo_erro == "VALOR_ERRADO":
+                                mensagem_status = "Erro validação: valor divergente"
+                                gui_log(f"[VALIDADOR] Tipo de erro: Valor digitado diferente do esperado")
+                            elif tipo_erro == "QTD_NEGATIVA":
+                                # ✅ QUANTIDADE NEGATIVA NÃO É ERRO! Considera validação OK
+                                gui_log(f"✅ [VALIDADOR] Quantidade negativa detectada - É PERMITIDA, validação OK")
+                                validacao_ok = True
+                                mensagem_status = "Processo Oracle Concluído"
+                            elif tipo_erro == "PRODUTO_INVALIDO":
+                                mensagem_status = "Erro Oracle: produto inválido"
+                                gui_log(f"[VALIDADOR] Tipo de erro: Produto não encontrado")
+                            else:
+                                mensagem_status = "Não concluído no Oracle"
+                                gui_log(f"[VALIDADOR] Tipo de erro: {tipo_erro}")
+
+                            gui_log(f"[VALIDADOR] Marcando linha como '{mensagem_status}'")
+
+                            # ═══════════════════════════════════════════════════════════════
+                            # 🧹 LIMPAR FORMULÁRIO COM F6 (OBRIGATÓRIO ANTES DE CONTINUAR)
+                            # ═══════════════════════════════════════════════════════════════
+                            gui_log("[VALIDADOR] ═══════════════════════════════════════════════")
+                            gui_log("[VALIDADOR] 🧹 Pressionando F6 para limpar formulário...")
+
+                            limpar_sucesso = False
+                            try:
+                                if MODO_TESTE:
+                                    gui_log("[VALIDADOR] [MODO TESTE] Simulando pressionar F6")
+                                    limpar_sucesso = True
+                                else:
+                                    # 🔧 CORREÇÃO: Pausar hook do teclado temporariamente
+                                    gui_log("[VALIDADOR] Pausando hook do teclado para evitar interceptação...")
+                                    try:
+                                        keyboard.unhook_all()
+                                        gui_log("[VALIDADOR] ✅ Hook pausado")
+                                    except:
+                                        pass
+
+                                    # Tentar F6 com múltiplas tentativas
+                                    for tentativa in range(3):
+                                        try:
+                                            gui_log(f"[VALIDADOR] >> Tentativa {tentativa+1}/3: Pressionando F6...")
+                                            time.sleep(0.3)  # Pequeno delay antes de pressionar
+                                            pyautogui.press('f6')
+                                            time.sleep(0.5)  # Aguardar tecla ser processada
+                                            gui_log(f"[VALIDADOR] << F6 pressionado (tentativa {tentativa+1})")
+                                            limpar_sucesso = True
+                                            break
+                                        except Exception as e_tentativa:
+                                            gui_log(f"[VALIDADOR] ⚠️ Tentativa {tentativa+1} falhou: {e_tentativa}")
+                                            if tentativa < 2:
+                                                time.sleep(0.5)
+
+                                    # Reativar hook do teclado
+                                    try:
+                                        def parar_callback_reativado(event):
+                                            global _rpa_running
+                                            if event.name == 'esc' and event.event_type == 'down':
+                                                gui_log("⚠️ [ESC] TECLA ESC PRESSIONADA - PARANDO RPA...")
+                                                _rpa_running = False
+                                                keyboard.unhook_all()
+                                        keyboard.hook(parar_callback_reativado)
+                                        gui_log("[VALIDADOR] ✅ Hook do teclado reativado")
+                                    except:
+                                        pass
+
+                                    if limpar_sucesso:
+                                        gui_log("[VALIDADOR] ✅ Tecla F6 pressionada com sucesso")
+                                        gui_log("[VALIDADOR] Aguardando 3 segundos para formulário limpar...")
+                                        time.sleep(3)  # Aguardar formulário limpar
+                                        gui_log("[VALIDADOR] ✅ Formulário deve estar limpo agora")
+                                    else:
+                                        # 🔧 FALLBACK: Usar botão Limpar se F6 falhar
+                                        gui_log("[VALIDADOR] ⚠️ F6 falhou após 3 tentativas, usando botão Limpar...")
+                                        coord_limpar = config["coordenadas"].get("tela_06_limpar")
+                                        if coord_limpar:
+                                            pyautogui.click(coord_limpar["x"], coord_limpar["y"])
+                                            time.sleep(3)
+                                            gui_log("[VALIDADOR] ✅ Botão Limpar clicado como fallback")
+                                        else:
+                                            gui_log("[VALIDADOR] ❌ Botão Limpar não configurado em config.json")
+
+                            except Exception as e_limpar:
+                                gui_log(f"[VALIDADOR] ❌ ERRO CRÍTICO ao limpar formulário: {e_limpar}")
+                                gui_log(f"[VALIDADOR] Tipo do erro: {type(e_limpar).__name__}")
+                                import traceback
+                                gui_log(f"[VALIDADOR] Traceback: {traceback.format_exc()}")
+
+                            gui_log("[VALIDADOR] ═══════════════════════════════════════════════")
+
+                            # Marcar no Sheets com mensagem específica (NÃO adicionar ao cache)
+                            try:
+                                service.spreadsheets().values().update(
+                                    spreadsheetId=SPREADSHEET_ID,
+                                    range=range_str,
+                                    valueInputOption="RAW",
+                                    body={"values": [[mensagem_status]]}
+                                ).execute()
+                                gui_log(f"✅ Status atualizado: '{mensagem_status}'")
+
+                                # Notificar erro no Telegram
+                                if _telegram_notifier:
+                                    try:
+                                        if _telegram_notifier.enabled:
+                                            resultado = _telegram_notifier.notificar_erro_item(i, item, mensagem_status)
+                                            gui_log(f"📱 [TELEGRAM] Notificação de erro enviada: {resultado}")
+                                    except Exception as e:
+                                        gui_log(f"⚠️ [TELEGRAM] Erro ao notificar: {e}")
+
+                            except Exception as e_validador:
+                                gui_log(f"⚠️ Erro ao atualizar status: {e_validador}")
+
+                            # NÃO adicionar ao cache - linha será reprocessada no próximo ciclo
+                            gui_log("[VALIDADOR] Item marcado para retry na próxima execução")
+
+                            # 🛑 VERIFICAR SE É ERRO QUE REQUER PARADA DO ROBÔ
+                            if "Tela incorreta" in mensagem_status or "tela incorreta" in mensagem_status.lower():
+                                gui_log("🛑 ERRO DE TELA INCORRETA DETECTADO!")
+                                gui_log("⚠️ PARANDO EXECUÇÃO para correção manual")
+                                gui_log("✅ Item ficará marcado para retry na próxima execução")
+                                return False  # PARA O ROBÔ
+
+                            gui_log("[VALIDADOR] Pulando para próxima linha (esta será reprocessada)")
+                            continue
+                        else:
+                            gui_log("[VALIDADOR] ✅ Validação passou - campos corretos!")
+
+                        gui_log("[VALIDADOR] ═══════════════════════════════════════════════")
+
+                    # ═══════════════════════════════════════════════════════════════
+                    # SALVAR COM Ctrl+S (APÓS VALIDAÇÃO HÍBRIDA)
+                    # ═══════════════════════════════════════════════════════════════
+                    gui_log("[SAVE] ═══════════════════════════════════════════════")
+
+                    # 🌐 VERIFICAR QUEDA DE REDE ANTES DE SALVAR
+                    if verificar_queda_rede():
+                        gui_log("❌ QUEDA DE REDE detectada antes do salvamento!")
+                        return False
+
+                    gui_log("[SAVE] Iniciando salvamento com Ctrl+S...")
+                    gui_log("[SAVE] >> Pressionando CTRL+S...")
                     pyautogui.hotkey("ctrl", "s")
-                    gui_log("⏳ Aguardando Oracle salvar...")
-                    time.sleep(3)  # Aguardar Oracle salvar antes de marcar como concluído
+                    gui_log("[SAVE] << CTRL+S pressionado")
+                    gui_log("[SAVE] Aguardando 1 segundo...")
+                    time.sleep(1)
+                    gui_log("[SAVE] Aguardando mais 0.5 segundos...")
+                    time.sleep(0.5)
+                    gui_log("[SAVE] ✅ Ctrl+S executado")
 
-                    gui_log("⏳ Inicio inserção no cache...")
+                    # ═══════════════════════════════════════════════════════════════
+                    # 💾 ADICIONAR AO CACHE IMEDIATAMENTE (APÓS Ctrl+S)
+                    # IMPORTANTE: Adiciona ANTES de confirmar salvamento para evitar
+                    # duplicação se houver falha/queda de rede durante salvamento
+                    # Melhor ter no cache e não salvar, do que salvar 2x!
+                    # ═══════════════════════════════════════════════════════════════
+                    gui_log("💾 Adicionando ao cache ANTES de aguardar salvamento...")
 
-                # ✅ GRAVAR NO CACHE (APÓS Ctrl+S, ANTES de tentar Sheets)
-                sucesso_cache = cache.adicionar(
-                    id_item=id_linha,
-                    linha_atual=i,
-                    item=item,
-                    quantidade=quantidade,
-                    referencia=referencia,
-                    status="pendente"
-                )
-                if sucesso_cache:
-                    gui_log(f"💾 Registrado no cache: {id_linha}")
-                else:
-                    gui_log(f"⚠️ Falha ao registrar no cache (ID vazio?)")
+                    sucesso_cache = cache.adicionar(
+                        id_item=id_linha,
+                        linha_atual=i,
+                        item=item,
+                        quantidade=quantidade,
+                        referencia=referencia,
+                        status="pendente"
+                    )
+                    if sucesso_cache:
+                        gui_log(f"✅ Registrado no cache: {id_linha}")
+                    else:
+                        gui_log(f"⚠️ Falha ao registrar no cache (ID vazio?)")
 
-                # Atualizar Google Sheets
-                try:
-                    service.spreadsheets().values().update(
-                        spreadsheetId=SPREADSHEET_ID,
-                        range=f"{SHEET_NAME}!T{i}",
-                        valueInputOption="RAW",
-                        body={"values": [["Processo Oracle Concluído"]]}
-                    ).execute()
+                    # ═══════════════════════════════════════════════════════════════
+                    # ⏳ AGUARDAR SALVAMENTO SER CONCLUÍDO (TELA VOLTAR AO NORMAL)
+                    # Verifica se a tela voltou ao estado correto após Ctrl+S
+                    # Estratégia: 5s + (se falhar) 30s + (se falhar) ERRO
+                    # ═══════════════════════════════════════════════════════════════
+                    gui_log("[SAVE] ═══════════════════════════════════════════════")
+                    gui_log("[SAVE] Aguardando confirmação de salvamento...")
 
-                    # ✅ Marcar como concluído no cache
-                    cache.marcar_concluido(id_linha)
-                    gui_log(f"✅ Linha {i} processada e salva no Oracle")
-                except Exception as err:
-                    gui_log(f"⚠️ Falha ao atualizar Sheets: {err}. Retry em background...")
+                    sucesso_save, tipo_save, tempo_save = aguardar_salvamento_concluido()
+
+                    if not sucesso_save:
+                        # FALHA: Tela não voltou ao estado normal após Ctrl+S
+                        gui_log(f"❌ [SAVE] FALHA NO SALVAMENTO após {tempo_save:.1f}s - tela não voltou ao normal")
+                        gui_log(f"[SAVE] Tipo de erro: {tipo_save}")
+
+                        # ═══════════════════════════════════════════════════════════════
+                        # 🧹 LIMPAR FORMULÁRIO COM F6 (OBRIGATÓRIO ANTES DE CONTINUAR)
+                        # ═══════════════════════════════════════════════════════════════
+                        gui_log("[SAVE] ═══════════════════════════════════════════════")
+                        gui_log("[SAVE] 🧹 Pressionando F6 para forçar limpeza do formulário...")
+
+                        limpar_sucesso = False
+                        try:
+                            if MODO_TESTE:
+                                gui_log("[SAVE] [MODO TESTE] Simulando pressionar F6")
+                                limpar_sucesso = True
+                            else:
+                                # 🔧 CORREÇÃO: Pausar hook do teclado temporariamente
+                                gui_log("[SAVE] Pausando hook do teclado para evitar interceptação...")
+                                try:
+                                    keyboard.unhook_all()
+                                    gui_log("[SAVE] ✅ Hook pausado")
+                                except:
+                                    pass
+
+                                # Tentar F6 com múltiplas tentativas
+                                for tentativa in range(3):
+                                    try:
+                                        gui_log(f"[SAVE] >> Tentativa {tentativa+1}/3: Pressionando F6...")
+                                        time.sleep(0.3)  # Pequeno delay antes de pressionar
+                                        pyautogui.press('f6')
+                                        time.sleep(0.5)  # Aguardar tecla ser processada
+                                        gui_log(f"[SAVE] << F6 pressionado (tentativa {tentativa+1})")
+                                        limpar_sucesso = True
+                                        break
+                                    except Exception as e_tentativa:
+                                        gui_log(f"[SAVE] ⚠️ Tentativa {tentativa+1} falhou: {e_tentativa}")
+                                        if tentativa < 2:
+                                            time.sleep(0.5)
+
+                                # Reativar hook do teclado
+                                try:
+                                    def parar_callback_reativado(event):
+                                        global _rpa_running
+                                        if event.name == 'esc' and event.event_type == 'down':
+                                            gui_log("⚠️ [ESC] TECLA ESC PRESSIONADA - PARANDO RPA...")
+                                            _rpa_running = False
+                                            keyboard.unhook_all()
+                                    keyboard.hook(parar_callback_reativado)
+                                    gui_log("[SAVE] ✅ Hook do teclado reativado")
+                                except:
+                                    pass
+
+                                if limpar_sucesso:
+                                    gui_log("[SAVE] ✅ Tecla F6 pressionada com sucesso")
+                                    gui_log("[SAVE] Aguardando 3 segundos para formulário limpar...")
+                                    time.sleep(3)  # Aguardar formulário limpar
+                                    gui_log("[SAVE] ✅ Formulário deve estar limpo agora")
+                                else:
+                                    # 🔧 FALLBACK: Usar botão Limpar se F6 falhar
+                                    gui_log("[SAVE] ⚠️ F6 falhou após 3 tentativas, usando botão Limpar...")
+                                    coord_limpar = config["coordenadas"].get("tela_06_limpar")
+                                    if coord_limpar:
+                                        pyautogui.click(coord_limpar["x"], coord_limpar["y"])
+                                        time.sleep(3)
+                                        gui_log("[SAVE] ✅ Botão Limpar clicado como fallback")
+                                    else:
+                                        gui_log("[SAVE] ❌ Botão Limpar não configurado em config.json")
+
+                        except Exception as e_limpar:
+                            gui_log(f"[SAVE] ❌ ERRO CRÍTICO ao limpar formulário: {e_limpar}")
+                            gui_log(f"[SAVE] Tipo do erro: {type(e_limpar).__name__}")
+                            import traceback
+                            gui_log(f"[SAVE] Traceback: {traceback.format_exc()}")
+
+                        gui_log("[SAVE] ═══════════════════════════════════════════════")
+
+                        # Marcar como erro no Google Sheets
+                        try:
+                            # Mensagem detalhada sobre o tipo de erro
+                            if tipo_save == "TRAVADO":
+                                mensagem_status = f"Tela não voltou ao normal após Ctrl+S ({tempo_save:.0f}s) - Verificar Oracle"
+                            elif tipo_save == "IMAGEM_NAO_EXISTE":
+                                mensagem_status = "ERRO: Imagem tela_transferencia_subinventory.png não encontrada"
+                            elif tipo_save == "QUEDA_REDE":
+                                mensagem_status = f"Queda de rede durante salvamento ({tempo_save:.0f}s)"
+                            elif tipo_save == "RPA_PARADO":
+                                mensagem_status = f"RPA parado pelo usuário durante salvamento ({tempo_save:.0f}s)"
+                            else:
+                                mensagem_status = f"Erro salvamento ({tempo_save:.0f}s) - {tipo_save}"
+
+                            service.spreadsheets().values().update(
+                                spreadsheetId=SPREADSHEET_ID,
+                                range=range_str,
+                                valueInputOption="RAW",
+                                body={"values": [[mensagem_status]]}
+                            ).execute()
+                            gui_log(f"✅ Status atualizado no Sheets: '{mensagem_status}'")
+                        except Exception as e_timeout:
+                            gui_log(f"⚠️ Erro ao atualizar status no Sheets: {e_timeout}")
+
+                        # Item JÁ está no cache - não vai duplicar
+                        # Será reprocessado no próximo ciclo
+                        gui_log("[SAVE] ⚠️ Item está no cache, não será duplicado")
+                        gui_log("[SAVE] Pulando para próxima linha (esta será reprocessada)")
+                        continue
+
+                    # ═══════════════════════════════════════════════════════════════
+                    # ✅ SALVAMENTO CONFIRMADO! (tela voltou ao estado normal)
+                    # Item JÁ está no cache (adicionado após Ctrl+S)
+                    # Agora apenas atualiza Sheets e remove do cache
+                    # ═══════════════════════════════════════════════════════════════
+                    gui_log(f"✅ [SAVE] Salvamento confirmado em {tempo_save:.1f}s!")
+                    gui_log("[SAVE] Tela voltou ao estado normal - salvamento bem-sucedido")
+                    gui_log("[SAVE] ═══════════════════════════════════════════════")
+
+                    # ═══════════════════════════════════════════════════════════════
+                    # 📊 ATUALIZAR GOOGLE SHEETS E REMOVER DO CACHE
+                    # ═══════════════════════════════════════════════════════════════
+
+                    # 🌐 VERIFICAR QUEDA DE REDE ANTES DE ATUALIZAR SHEETS
+                    if verificar_queda_rede():
+                        gui_log("❌ QUEDA DE REDE detectada antes de atualizar Google Sheets!")
+                        gui_log("⚠️ Item permanece no cache para retry no próximo ciclo")
+                        return False
+
+                    try:
+                        service.spreadsheets().values().update(
+                            spreadsheetId=SPREADSHEET_ID,
+                            range=f"{SHEET_NAME}!T{i}",
+                            valueInputOption="RAW",
+                            body={"values": [["Processo Oracle Concluído"]]}
+                        ).execute()
+
+                        # ✅ Marcar como concluído no cache (remove do cache)
+                        cache.marcar_concluido(id_linha)
+                        gui_log(f"✅ Linha {i} processada e salva no Oracle + Sheets atualizado")
+
+                        # Notificar sucesso no Telegram
+                        if _telegram_notifier:
+                            try:
+                                if _telegram_notifier.enabled:
+                                    resultado = _telegram_notifier.notificar_sucesso_item(i, item)
+                                    gui_log(f"📱 [TELEGRAM] Notificação de sucesso enviada: {resultado}")
+                            except Exception as e:
+                                gui_log(f"⚠️ [TELEGRAM] Erro ao notificar sucesso: {e}")
+
+                    except Exception as err:
+                        gui_log(f"⚠️ Falha ao atualizar Sheets: {err}. Permanece no cache para retry...")
 
                 itens_processados += 1
                 _dados_inseridos_oracle = True  # Marcar que dados foram inseridos
@@ -1110,70 +2703,146 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
 def etapa_06_navegacao_pos_oracle(config):
     """Etapa 6: Navegação após RPA_Oracle - Fechar janelas e abrir Bancada
 
-    NOVO FLUXO SIMPLIFICADO:
-    - Se inseriu dados: limpar + fechar 2 X
-    - Se NÃO inseriu: apenas fechar 2 X
-    - Depois abrir Bancada
+    FLUXO CORRETO:
+    1. Limpar formulário (botão Limpar)
+    2. Fechar janela "Subinventory Transfer (BC2)" (X)
+    3. Fechar janela "Transferencia do Subinventario (BC2)" (X)
+    4. Clicar em "Janela" para dar foco
+    5. Clicar no menu de navegação
+    6. Duplo clique para abrir Bancada de Material
     """
-    global _dados_inseridos_oracle
+    global _rpa_running, _dados_inseridos_oracle
 
-    gui_log("📋 ETAPA 6: Fechamento de modais e abertura da Bancada")
+    try:
+        gui_log("📋 ETAPA 6: Fechamento de modais e abertura da Bancada")
 
-    tempo_espera = config["tempos_espera"]["entre_cliques"]
+        tempo_espera = config["tempos_espera"]["entre_cliques"]
 
-    # Verificar se dados foram inseridos no Oracle
-    if _dados_inseridos_oracle:
-        gui_log("🧹 Dados foram inseridos - Limpando formulário primeiro...")
-    else:
-        gui_log("ℹ️ Nenhum dado foi inserido - Fechando modais...")
+        # Verificar se dados foram inseridos no Oracle
+        if _dados_inseridos_oracle:
+            gui_log("🧹 Dados foram inseridos - Limpando formulário primeiro...")
+        else:
+            gui_log("ℹ️ Nenhum dado foi inserido - Fechando modais...")
 
-    # 1. Limpar formulário (botão Limpar)
-    coord = config["coordenadas"]["tela_06_limpar"]
-    clicar_coordenada(coord["x"], coord["y"], descricao=coord["descricao"])
+        # 1. Limpar formulário (botão Limpar)
+        gui_log("🧹 [PASSO 1/6] Limpando formulário...")
+        coord = config["coordenadas"]["tela_06_limpar"]
+        clicar_coordenada(coord["x"], coord["y"], descricao=coord["descricao"])
 
-    if not aguardar_com_pausa(tempo_espera, "Aguardando limpeza"):
-       return False
+        if not aguardar_com_pausa(tempo_espera, "Aguardando limpeza"):
+            if not _rpa_running:
+                gui_log("❌ [PASSO 1/6] RPA foi parado durante limpeza")
+                return False
 
-    # 2. Fechar janela "Subinventory Transfer (BC2)" - Botão X
-    gui_log("🔴 Fechando 'Subinventory Transfer (BC2)'...")
-    coord = config["coordenadas"]["tela_06_fechar_subinventory_transfer"]
-    clicar_coordenada(coord["x"], coord["y"], descricao=coord["descricao"])
+        # 2. Fechar janela "Subinventory Transfer (BC2)" - Botão X
+        gui_log("🔴 [PASSO 2/6] Fechando 'Subinventory Transfer (BC2)'...")
+        coord = config["coordenadas"]["tela_06_fechar_subinventory_transfer"]
+        clicar_coordenada(coord["x"], coord["y"], descricao=coord["descricao"])
 
-    if not aguardar_com_pausa(tempo_espera, "Aguardando fechar primeira janela"):
+        if not aguardar_com_pausa(tempo_espera, "Aguardando fechar primeira janela"):
+            if not _rpa_running:
+                gui_log("❌ [PASSO 2/6] RPA foi parado ao fechar primeira janela")
+                return False
+
+        # 3. Fechar janela "Transferencia do Subinventario (BC2)" - Botão X
+        gui_log("🔴 [PASSO 3/6] Fechando 'Transferencia do Subinventario (BC2)'...")
+        coord = config["coordenadas"]["tela_06_fechar_transferencia_subinventario_bc2"]
+        clicar_coordenada(coord["x"], coord["y"], descricao=coord["descricao"])
+
+        if not aguardar_com_pausa(tempo_espera, "Aguardando fechar segunda janela"):
+            if not _rpa_running:
+                gui_log("❌ [PASSO 3/6] RPA foi parado ao fechar segunda janela")
+                return False
+
+        gui_log("✅ Ambas as modais foram fechadas com sucesso")
+
+        # 4. CRÍTICO: Clicar em "Janela" para dar foco antes de navegar
+        gui_log("🖱️ [PASSO 4/6] Clicando em 'Janela' para dar foco...")
+        gui_log(f"[DEBUG] _rpa_running={_rpa_running} | Tentando clicar em 'Janela'")
+
+        coord = config["coordenadas"]["navegador_janela"]
+        gui_log(f"[DEBUG] Coordenadas de 'Janela': x={coord['x']}, y={coord['y']}")
+
+        try:
+            clicar_coordenada(coord["x"], coord["y"], descricao=coord["descricao"])
+            gui_log(f"[DEBUG] ✅ Clique em 'Janela' executado. _rpa_running={_rpa_running}")
+        except pyautogui.FailSafeException as e:
+            gui_log("🛑 [PASSO 4/6] FAILSAFE ACIONADO ao clicar em 'Janela'!")
+            gui_log(f"   Mouse estava no canto superior esquerdo: {e}")
+            gui_log("   Mova o mouse para longe do canto (0,0) e tente novamente")
+            _rpa_running = False
+            return False
+        except Exception as e:
+            gui_log(f"❌ [PASSO 4/6] ERRO ao clicar em 'Janela': {e}")
+            import traceback
+            gui_log(traceback.format_exc())
+            return False
+
+        if not aguardar_com_pausa(tempo_espera, "Aguardando foco em 'Janela'"):
+            if not _rpa_running:
+                gui_log("❌ [PASSO 4/6] RPA foi parado após clicar em 'Janela'")
+                return False
+
+        # 5. Clicar no menu de navegação
+        gui_log("🖱️ [PASSO 5/6] Clicando no menu de navegação...")
+        gui_log(f"[DEBUG] _rpa_running={_rpa_running}")
+        coord = config["coordenadas"]["navegador_menu"]
+        gui_log(f"[DEBUG] Coordenadas do menu: x={coord['x']}, y={coord['y']}")
+
+        try:
+            clicar_coordenada(coord["x"], coord["y"], descricao=coord["descricao"])
+            gui_log(f"[DEBUG] ✅ Clique no menu executado. _rpa_running={_rpa_running}")
+        except pyautogui.FailSafeException:
+            gui_log("🛑 [PASSO 5/6] FAILSAFE acionado ao clicar no menu")
+            _rpa_running = False
+            return False
+
+        if not aguardar_com_pausa(tempo_espera, "Aguardando menu abrir"):
+            if not _rpa_running:
+                gui_log("❌ [PASSO 5/6] RPA foi parado após clicar no menu")
+                return False
+
+        # 6. Abrir Bancada de Material
+        gui_log("📂 [PASSO 6/6] Abrindo Bancada de Material...")
+        gui_log(f"[DEBUG] _rpa_running={_rpa_running}")
+        coord = config["coordenadas"]["tela_07_bancada_material"]
+        duplo_clique = coord.get("duplo_clique", False)
+        gui_log(f"[DEBUG] Coordenadas bancada: x={coord['x']}, y={coord['y']}, duplo_clique={duplo_clique}")
+
+        try:
+            clicar_coordenada(coord["x"], coord["y"], duplo=duplo_clique, descricao=coord["descricao"])
+            gui_log(f"[DEBUG] ✅ Bancada aberta. _rpa_running={_rpa_running}")
+        except pyautogui.FailSafeException:
+            gui_log("🛑 [PASSO 6/6] FAILSAFE acionado ao abrir bancada")
+            _rpa_running = False
+            return False
+        except Exception as e:
+            gui_log(f"❌ [PASSO 6/6] Erro ao abrir bancada: {e}")
+            import traceback
+            gui_log(traceback.format_exc())
+            return False
+
+        tempo_espera = config["tempos_espera"]["apos_modal"]
+        resultado = aguardar_com_pausa(tempo_espera, "Aguardando abertura da Bancada")
+
+        if not resultado:
+            gui_log("⚠️ [ETAPA 6] Aguardar foi interrompido, mas etapa foi concluída")
+            # Verificar se foi realmente interrompido pelo usuário ou apenas timeout
+            if not _rpa_running:
+                gui_log("🛑 [ETAPA 6] RPA foi parado pelo usuário")
+                return False
+            else:
+                gui_log("✅ [ETAPA 6] Continuando ciclo (abertura da bancada concluída)")
+                return True
+
+        gui_log("✅ [ETAPA 6] Navegação concluída com sucesso")
+        return True
+
+    except Exception as e:
+        gui_log(f"❌ [ETAPA 6] Erro durante navegação: {e}")
+        import traceback
+        gui_log(traceback.format_exc())
         return False
-
-    # 3. Fechar janela "Transferencia do Subinventario (BC2)" - Botão X
-    gui_log("🔴 Fechando 'Transferencia do Subinventario (BC2)'...")
-    coord = config["coordenadas"]["tela_06_fechar_transferencia_subinventario_bc2"]
-    clicar_coordenada(coord["x"], coord["y"], descricao=coord["descricao"])
-
-    if not aguardar_com_pausa(tempo_espera, "Aguardando fechar segunda janela"):
-        return False
-
-    # 4. Clicar em "Janela" para dar foco
-    gui_log("🖱️ Clicando em 'Janela'...")
-    coord = config["coordenadas"]["navegador_janela"]
-    clicar_coordenada(coord["x"], coord["y"], descricao=coord["descricao"])
-
-    if not aguardar_com_pausa(tempo_espera, "Aguardando foco na janela"):
-        return False
-
-    # 5. Clicar no menu de navegação
-    gui_log("🖱️ Clicando no menu de navegação...")
-    coord = config["coordenadas"]["navegador_menu"]
-    clicar_coordenada(coord["x"], coord["y"], descricao=coord["descricao"])
-
-    if not aguardar_com_pausa(tempo_espera, "Aguardando menu navegação"):
-        return False
-
-    # 6. Duplo clique para abrir a bancada
-    gui_log("📂 Abrindo Bancada de Material...")
-    coord = config["coordenadas"]["tela_07_bancada_material"]
-    duplo_clique = coord.get("duplo_clique", False)
-    clicar_coordenada(coord["x"], coord["y"], duplo=duplo_clique, descricao=coord["descricao"])
-
-    tempo_espera = config["tempos_espera"]["apos_modal"]
-    return aguardar_com_pausa(tempo_espera, "Aguardando abertura da Bancada")
 
 def mapear_colunas_oracle_bancada(df):
     """
@@ -1410,6 +3079,7 @@ def monitorar_clipboard_inteligente(max_tempo=15*60, intervalo_check=5, estabili
     ultimo_tamanho = 0
     tempo_sem_mudanca = 0
     verificacoes = 0
+    ultimo_movimento_mouse = time.time()
 
     while (time.time() - inicio) < max_tempo:
         if not _rpa_running:
@@ -1418,6 +3088,9 @@ def monitorar_clipboard_inteligente(max_tempo=15*60, intervalo_check=5, estabili
 
         verificacoes += 1
         tempo_decorrido = int(time.time() - inicio)
+
+        # NOTA: Movimento de mouse agora é feito pela thread em background (a cada 1s)
+        # Removido daqui para evitar conflito
 
         # Ler clipboard atual
         texto_atual = pyperclip.paste() or ""
@@ -1535,7 +3208,7 @@ def etapa_07_executar_rpa_bancada(config):
 
         # PASSO 3: Aguardar 2 minutos antes de clicar na célula
         gui_log("⏳ [3/9] Aguardando 2 minutos para grid carregar...")
-        if not aguardar_com_pausa(120, "Carregamento da grid (2 minutos)"):
+        if not aguardar_com_pausa(120, "Carregamento da grid (2 minutos)", evitar_hibernar=True):
             return False
 
         # PASSO 4: Clicar na primeira célula da coluna 'Org.'
@@ -1586,6 +3259,13 @@ def etapa_07_executar_rpa_bancada(config):
         gui_log("💡 Sistema detectará automaticamente quando modal fechar (cópia completa)")
         gui_log("")
 
+        # 🖱️ INICIAR MOVIMENTO CONTÍNUO DO MOUSE (anti-hibernação durante TODA a bancada)
+        gui_log("🖱️ Iniciando proteção anti-hibernação ULTRA-AGRESSIVA...")
+        gui_log("   → Mouse: Move 5px a cada 1 segundo")
+        gui_log("   → Teclado: Pressiona Shift a cada 15 segundos")
+        gui_log("💡 Protege contra hibernação, screensaver e bloqueio de tela")
+        stop_mouse_event = iniciar_movimento_mouse_continuo()
+
         texto_copiado = monitorar_clipboard_inteligente(
             max_tempo=15 * 60,        # Máximo 15 minutos
             intervalo_check=3,        # Verificar a cada 3 segundos (mais rápido)
@@ -1596,6 +3276,14 @@ def etapa_07_executar_rpa_bancada(config):
             gui_log("❌ ERRO: Clipboard vazio após todas as tentativas")
             gui_log("💡 O Oracle pode não ter conseguido copiar os dados")
             gui_log("💡 Verifique se a grid tem dados e tente novamente")
+
+            # 🖱️ PARAR MOVIMENTO CONTÍNUO DO MOUSE (clipboard falhou)
+            try:
+                stop_mouse_event.set()
+                gui_log("🖱️ Movimento contínuo do mouse parado (clipboard vazio)")
+            except:
+                pass
+
             return False
 
         # Dados copiados com sucesso!
@@ -1668,8 +3356,15 @@ def etapa_07_executar_rpa_bancada(config):
         gui_log("✅ PROCESSAMENTO DA BANCADA CONCLUÍDO")
         gui_log("=" * 60)
 
+        # 🖱️ PARAR MOVIMENTO CONTÍNUO DO MOUSE
+        try:
+            stop_mouse_event.set()
+            gui_log("🖱️ Movimento contínuo do mouse parado")
+        except:
+            pass
+
         tempo_espera = config["tempos_espera"]["apos_rpa_bancada"]
-        return aguardar_com_pausa(tempo_espera, "Aguardando estabilização")
+        return aguardar_com_pausa(tempo_espera, "Aguardando estabilização", evitar_hibernar=True)
 
     except Exception as e:
         gui_log("=" * 60)
@@ -1678,9 +3373,16 @@ def etapa_07_executar_rpa_bancada(config):
         import traceback
         gui_log(traceback.format_exc())
 
+        # 🖱️ PARAR MOVIMENTO CONTÍNUO DO MOUSE (em caso de erro)
+        try:
+            stop_mouse_event.set()
+            gui_log("🖱️ Movimento contínuo do mouse parado (erro)")
+        except:
+            pass
+
         # Não falhar o ciclo por causa disso
         tempo_espera = config["tempos_espera"]["apos_rpa_bancada"]
-        return aguardar_com_pausa(tempo_espera, "Aguardando estabilização")
+        return aguardar_com_pausa(tempo_espera, "Aguardando estabilização", evitar_hibernar=True)
 
 
 def etapa_08_fechar_bancada(config):
@@ -1692,6 +3394,247 @@ def etapa_08_fechar_bancada(config):
 
     tempo_espera = config["tempos_espera"]["entre_cliques"]
     return aguardar_com_pausa(tempo_espera, "Aguardando fechamento")
+
+# =================== ESPERA INTELIGENTE ENTRE CICLOS ===================
+def aguardar_inteligente_entre_ciclos(config, max_minutos=15, intervalo_verificacao=60):
+    """
+    Aguarda entre ciclos verificando periodicamente se há novos itens no Google Sheets.
+
+    Funcionalidades:
+    - Verifica novos itens a cada {intervalo_verificacao} segundos (padrão: 60s = 1 minuto)
+    - Anti-hibernação: move o mouse periodicamente
+    - Se encontrar novos itens: retorna True imediatamente
+    - Se atingir {max_minutos} sem novos itens: retorna False
+
+    Args:
+        config: Configurações do RPA
+        max_minutos: Tempo máximo de espera em minutos (padrão: 15)
+        intervalo_verificacao: Intervalo entre verificações em segundos (padrão: 60)
+
+    Returns:
+        bool: True se encontrou novos itens, False se atingiu tempo máximo
+    """
+    global _rpa_running
+
+    max_segundos = max_minutos * 60
+    inicio = time.time()
+    verificacao_numero = 0
+
+    gui_log("")
+    gui_log("=" * 70)
+    gui_log(f"⏰ ESPERA INTELIGENTE ENTRE CICLOS")
+    gui_log(f"   • Tempo máximo: {max_minutos} minutos")
+    gui_log(f"   • Verificação de novos itens a cada: {intervalo_verificacao//60} minuto(s)")
+    gui_log(f"   • Anti-hibernação: ATIVO")
+    gui_log("=" * 70)
+
+    while _rpa_running:
+        tempo_decorrido = time.time() - inicio
+
+        # Verificar se atingiu o tempo máximo
+        if tempo_decorrido >= max_segundos:
+            gui_log("")
+            gui_log(f"⏱️ Tempo máximo de {max_minutos} minutos atingido")
+            gui_log("🔄 Retornando para atualizar bancada...")
+            return False
+
+        tempo_restante = max_segundos - tempo_decorrido
+        minutos_restantes = int(tempo_restante // 60)
+        segundos_restantes = int(tempo_restante % 60)
+
+        # Verificar se há novos itens no Google Sheets
+        verificacao_numero += 1
+        gui_log("")
+        gui_log(f"🔍 Verificação #{verificacao_numero} - Tempo restante: {minutos_restantes}m {segundos_restantes}s")
+
+        try:
+            # Verificar itens pendentes no Google Sheets
+            tem_itens = verificar_tem_itens_pendentes()
+
+            if tem_itens:
+                gui_log("✅ NOVOS ITENS DETECTADOS!")
+                gui_log(f"   Tempo economizado: {minutos_restantes}m {segundos_restantes}s")
+
+                # Notificar via Telegram
+                try:
+                    if _telegram_notifier and _telegram_notifier.enabled:
+                        _telegram_notifier.enviar_mensagem(
+                            f"🎯 <b>NOVOS ITENS DETECTADOS</b>\n\n"
+                            f"⏰ Verificação #{verificacao_numero}\n"
+                            f"⚡ Processando imediatamente...\n"
+                            f"💾 Economizou {minutos_restantes}m {segundos_restantes}s de espera"
+                        )
+                except:
+                    pass
+
+                return True
+            else:
+                gui_log("   Nenhum item novo encontrado")
+
+        except Exception as e:
+            gui_log(f"⚠️ Erro ao verificar itens: {e}")
+
+        # Aguardar intervalo de verificação com anti-hibernação
+        gui_log(f"⏳ Próxima verificação em {intervalo_verificacao//60} minuto(s)...")
+
+        tempo_aguardado = 0
+        intervalo_movimento = 30  # Mover mouse a cada 30 segundos
+        ultimo_movimento = time.time()
+
+        while tempo_aguardado < intervalo_verificacao and _rpa_running:
+            time.sleep(1)
+            tempo_aguardado += 1
+
+            # Anti-hibernação: mover mouse periodicamente
+            if time.time() - ultimo_movimento >= intervalo_movimento:
+                try:
+                    pos_atual = pyautogui.position()
+                    # Mover 1 pixel para direita e voltar
+                    pyautogui.moveTo(pos_atual.x + 1, pos_atual.y, duration=0.1)
+                    pyautogui.moveTo(pos_atual.x, pos_atual.y, duration=0.1)
+                    ultimo_movimento = time.time()
+                except:
+                    pass
+
+            # Mostrar progresso a cada 10 segundos
+            if tempo_aguardado % 10 == 0:
+                segundos_restantes_verificacao = intervalo_verificacao - tempo_aguardado
+                print(f"   {segundos_restantes_verificacao}s até próxima verificação...", end='\r')
+
+        if not _rpa_running:
+            gui_log("🛑 RPA parado pelo usuário durante espera")
+            return False
+
+    return False
+
+def verificar_tem_itens_pendentes():
+    """
+    Verifica se há itens pendentes no Google Sheets para processar.
+
+    Returns:
+        bool: True se há itens pendentes, False caso contrário
+    """
+    if not GOOGLE_SHEETS_DISPONIVEL:
+        return False
+
+    try:
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+        from google_auth_oauthlib.flow import InstalledAppFlow
+        from googleapiclient.discovery import build
+
+        SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+        SPREADSHEET_ID = "1UgJWxmnYzv-FVTT4rrrVEx3J_MNXZsctwrPSTyyylPQ"
+        SHEET_NAME = "Planilha Oracle"
+
+        # Autenticar
+        creds = None
+        if os.path.exists("token.json"):
+            creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                return False
+
+        service = build("sheets", "v4", credentials=creds)
+
+        # Ler planilha
+        result = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"{SHEET_NAME}!A2:T1000"
+        ).execute()
+
+        values = result.get("values", [])
+
+        if not values:
+            return False
+
+        # Verificar headers
+        headers_result = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"{SHEET_NAME}!A1:T1"
+        ).execute()
+
+        headers = headers_result.get("values", [[]])[0]
+
+        if "Status Oracle" not in headers:
+            return False
+
+        idx_status = headers.index("Status Oracle")
+
+        # Verificar se há linhas pendentes
+        for row in values:
+            if len(row) <= idx_status:
+                return True  # Linha sem status = pendente
+
+            status = str(row[idx_status]).strip().upper()
+
+            # Considerar pendente se vazio ou específicos
+            if not status or status == "" or "PENDENTE" in status or "AGUARDANDO" in status:
+                return True
+
+        return False
+
+    except Exception as e:
+        gui_log(f"⚠️ Erro ao verificar itens pendentes: {e}")
+        return False
+
+# =================== MONITORAMENTO DA TECLA ESC ===================
+def monitorar_tecla_esc():
+    """
+    Monitora a tecla ESC para parar o RPA (IGUAL AO RPA_ORACLE)
+    Usa keyboard.hook() para capturar TODAS as teclas e detectar ESC
+    """
+    global _rpa_running
+
+    gui_log("[ESC] ⌨️  Thread de monitoramento ESC iniciada")
+    gui_log("[ESC] 🔍 Pressione ESC a qualquer momento para parar o RPA")
+
+    def parar_callback(event):
+        """Callback chamado para TODAS as teclas pressionadas"""
+        global _rpa_running
+
+        # 🔧 CORREÇÃO: Apenas logar ESC para evitar spam (F6 não é relevante aqui)
+        if event.name == 'esc':
+            gui_log(f"[ESC] 🔘 Tecla ESC detectada | event_type: {event.event_type}")
+
+        # Verificar se é ESC e se está em modo "down" (pressionado)
+        if event.name == 'esc' and event.event_type == 'down':
+            gui_log("━" * 70)
+            gui_log("⚠️  [ESC] TECLA ESC PRESSIONADA - PARANDO RPA...")
+            gui_log("━" * 70)
+            _rpa_running = False
+            try:
+                keyboard.unhook_all()
+                gui_log("🛑 [ESC] Hook removido com sucesso")
+            except Exception as e_unhook:
+                gui_log(f"⚠️ [ESC] Erro ao remover hook: {e_unhook}")
+
+    try:
+        # Registrar hook para capturar TODAS as teclas
+        keyboard.hook(parar_callback)
+        gui_log("[ESC] ✅ Hook do teclado registrado com sucesso")
+        gui_log("[ESC] 🔄 Aguardando tecla ESC...")
+
+        # Loop enquanto RPA está rodando
+        while _rpa_running:
+            time.sleep(0.1)
+
+        gui_log("[ESC] 🏁 Thread de monitoramento ESC encerrada (_rpa_running=False)")
+
+        # Limpar hooks ao sair
+        try:
+            keyboard.unhook_all()
+            gui_log("[ESC] 🧹 Hooks limpos ao encerrar thread")
+        except:
+            pass
+
+    except Exception as e:
+        gui_log(f"[ESC] ❌ Erro no monitoramento ESC: {e}")
+        import traceback
+        gui_log(f"[ESC] Traceback:\n{traceback.format_exc()}")
 
 # =================== EXECUÇÃO DO CICLO COMPLETO ===================
 def executar_ciclo_completo(config):
@@ -1707,6 +3650,13 @@ def executar_ciclo_completo(config):
     if primeiro_ciclo:
         gui_log("🆕 PRIMEIRO CICLO - Se não houver itens após 2 tentativas, prossegue para Bancada")
     gui_log("=" * 60)
+
+    # Notificar início do ciclo no Telegram
+    if _telegram_notifier:
+        try:
+            _telegram_notifier.notificar_ciclo_inicio(_ciclo_atual)
+        except:
+            pass
 
     # Registrar início no Google Sheets
     if GOOGLE_SHEETS_DISPONIVEL:
@@ -1825,11 +3775,36 @@ def main(modo_continuo=True):
     Args:
         modo_continuo: Se True, executa em loop contínuo (padrão: True)
     """
-    global _rpa_running, _ciclo_atual
+    global _rpa_running, _ciclo_atual, _telegram_notifier
     _rpa_running = True
+
+    # Inicializar Telegram
+    if TELEGRAM_DISPONIVEL:
+        try:
+            _telegram_notifier = inicializar_telegram()
+            if _telegram_notifier and _telegram_notifier.enabled:
+                gui_log("✅ [TELEGRAM] Notificador inicializado com sucesso")
+                gui_log(f"   Bot Token: {_telegram_notifier.bot_token[:20]}...")
+                gui_log(f"   Chat ID: {_telegram_notifier.chat_id}")
+                # Enviar mensagem de teste
+                resultado = _telegram_notifier.enviar_mensagem("🤖 RPA Ciclo iniciado!")
+                gui_log(f"   Teste de envio: {resultado}")
+            else:
+                gui_log("⚠️ [TELEGRAM] Notificador criado mas desabilitado (verifique config.json)")
+        except Exception as e:
+            gui_log(f"⚠️ [TELEGRAM] Erro ao inicializar: {e}")
+            _telegram_notifier = None
+    else:
+        gui_log("⚠️ [TELEGRAM] Módulo telegram_notifier não disponível")
+        _telegram_notifier = None
+
+    # Iniciar monitoramento da tecla ESC em thread separada
+    thread_esc = threading.Thread(target=monitorar_tecla_esc, daemon=True)
+    thread_esc.start()
 
     gui_log("=" * 60)
     gui_log("🤖 RPA CICLO - Iniciado")
+    gui_log("⌨️ [ESC] Pressione ESC para parar o RPA a qualquer momento")
     if MODO_TESTE:
         gui_log("[MODO TESTE ATIVADO] Simulação sem movimentos físicos - apenas teste de lógica")
     gui_log("=" * 60)
@@ -1844,17 +3819,111 @@ def main(modo_continuo=True):
             gui_log("⚠️ IMPORTANTE: RPA será interrompido automaticamente em caso de falha crítica")
             gui_log("")
 
+            # Notificar início em modo contínuo no Telegram
+            if _telegram_notifier:
+                try:
+                    mensagem = (
+                        "🤖 <b>RPA CICLO INICIADO</b>\n\n"
+                        "🔄 <b>Modo:</b> Contínuo (24/7)\n"
+                        "✅ <b>Status:</b> Executando\n"
+                        f"⏰ {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
+                    )
+                    _telegram_notifier.enviar_mensagem(mensagem)
+                except:
+                    pass
+
             while _rpa_running:
-                # Executar ciclo
-                sucesso = executar_ciclo_completo(config)
+                # ═══════════════════════════════════════════════════════════════
+                # ETAPA 1: Verificar se há itens pendentes no Google Sheets
+                # ═══════════════════════════════════════════════════════════════
+                gui_log("")
+                gui_log("=" * 70)
+                gui_log("🔍 VERIFICANDO ITENS PENDENTES NO GOOGLE SHEETS...")
+                gui_log("=" * 70)
 
-                if sucesso:
-                    gui_log("✅ Ciclo concluído com sucesso! Iniciando próximo ciclo...")
+                tem_itens = verificar_tem_itens_pendentes()
 
-                    # Pequena pausa de 5 segundos entre ciclos para estabilização
-                    if not aguardar_com_pausa(5, "Pausa entre ciclos"):
+                if tem_itens:
+                    # ═══════════════════════════════════════════════════════════════
+                    # TEM ITENS: Executar ciclo completo (Oracle + Bancada)
+                    # ═══════════════════════════════════════════════════════════════
+                    gui_log("✅ Itens pendentes encontrados!")
+                    gui_log("🚀 Iniciando ciclo completo (Oracle + Bancada)...")
+
+                    sucesso = executar_ciclo_completo(config)
+
+                    if not sucesso:
+                        # FALHA CRÍTICA: Parar imediatamente
+                        gui_log("=" * 60)
+                        gui_log("❌ FALHA CRÍTICA DETECTADA!")
+                        gui_log("=" * 60)
+                        gui_log("🛑 RPA foi interrompido automaticamente")
+                        gui_log("📋 Verifique os logs acima para identificar o problema")
+                        gui_log("⚠️ Pode ser:")
+                        gui_log("   - Falha ao processar itens no Oracle")
+                        gui_log("   - Falha ao executar RPA Bancada")
+                        gui_log("   - Problema de conexão com Google Sheets")
+                        gui_log("   - Erro de coordenadas/cliques")
+                        gui_log("=" * 60)
+                        break  # PARAR IMEDIATAMENTE
+
+                    # Ciclo completo executado com sucesso
+                    gui_log("✅ Ciclo concluído com sucesso!")
+
+                    # Pequena pausa de 5 segundos para estabilização
+                    if not aguardar_com_pausa(5, "Pausa entre ciclos", evitar_hibernar=True):
                         break
+
                 else:
+                    # ═══════════════════════════════════════════════════════════════
+                    # NÃO TEM ITENS: Aguardar 15min verificando a cada 1min
+                    # ═══════════════════════════════════════════════════════════════
+                    gui_log("⚠️ Nenhum item pendente encontrado")
+                    gui_log("")
+                    gui_log("=" * 70)
+                    gui_log("🔄 MODO INTELIGENTE DE ESPERA")
+                    gui_log("   • Verifica novos itens a cada 1 minuto")
+                    gui_log("   • Se encontrar itens: processa imediatamente")
+                    gui_log("   • Após 15 minutos: atualiza bancada")
+                    gui_log("   • Anti-hibernação ATIVO durante espera")
+                    gui_log("=" * 70)
+
+                    # Esperar até 15 minutos verificando novos itens a cada 1 minuto
+                    tem_novos_itens = aguardar_inteligente_entre_ciclos(config, max_minutos=15, intervalo_verificacao=60)
+
+                    if tem_novos_itens:
+                        # Novos itens detectados durante espera
+                        gui_log("🎯 Novos itens detectados durante espera!")
+                        gui_log("🚀 Iniciando ciclo completo (Oracle + Bancada)...")
+
+                        sucesso = executar_ciclo_completo(config)
+
+                        if not sucesso:
+                            gui_log("=" * 60)
+                            gui_log("❌ FALHA CRÍTICA DETECTADA!")
+                            gui_log("=" * 60)
+                            break
+
+                    else:
+                        # 15 minutos completos sem novos itens
+                        gui_log("⏰ 15 minutos completos sem novos itens")
+                        gui_log("🔄 Atualizando bancada (executando apenas etapas de navegação + bancada)...")
+
+                        # Executar apenas bancada (sem Oracle)
+                        sucesso = executar_apenas_bancada(config)
+
+                        if not sucesso:
+                            gui_log("=" * 60)
+                            gui_log("❌ FALHA ao atualizar bancada")
+                            gui_log("=" * 60)
+                            break
+
+                # Verificar se RPA foi parado
+                if not _rpa_running:
+                    break
+
+            # Fim do loop contínuo (saiu por falha crítica ou parada manual)
+            if False:  # Placeholder para manter estrutura
                     # FALHA CRÍTICA: Parar imediatamente e avisar usuário
                     gui_log("=" * 60)
                     gui_log("❌ FALHA CRÍTICA DETECTADA!")
@@ -1885,6 +3954,12 @@ def main(modo_continuo=True):
         gui_log(traceback.format_exc())
     finally:
         _rpa_running = False
+        # Remover hook do teclado
+        try:
+            keyboard.unhook_all()
+            gui_log("⌨️ [ESC] Monitoramento de teclado desativado")
+        except:
+            pass
         gui_log("=" * 60)
         gui_log("🏁 RPA CICLO - Finalizado")
         gui_log(f"📊 Total de ciclos executados: {_ciclo_atual}")

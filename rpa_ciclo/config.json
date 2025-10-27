@@ -95,6 +95,17 @@
       "descricao": "Clique na primeira célula (Org) da grid"
     }
   },
+  "campos_oracle_validacao": {
+    "descricao": "Coordenadas completas dos campos para validação híbrida (x, y, largura, altura)",
+    "observacao": "Todos os campos: Y=155, Altura=22 (Y_final=177)",
+    "campo_item": [67, 155, 118, 22],
+    "campo_quantidade": [639, 155, 89, 22],
+    "campo_referencia": [737, 155, 100, 22],
+    "campo_sub_o": [208, 155, 101, 22],
+    "campo_end_o": [316, 155, 101, 22],
+    "campo_sub_d": [422, 155, 103, 22],
+    "campo_end_d": [530, 155, 100, 22]
+  },
   "textos": {
     "funcionario_nome": "Wallatas Moreira",
     "navegador_opcao": "1 - Navegador - TPC BR COMP BC2 INV USER",
@@ -111,5 +122,10 @@
   "caminhos_rpa": {
     "rpa_oracle": "../rpa_oracle/RPA_Oracle.py",
     "rpa_bancada": "../rpa_bancada/main.py"
+  },
+  "telegram": {
+    "bot_token": "8300855810:AAEC4OTval-NLjnquKsd49aOG7b4NJZo5mU",
+    "chat_id": "-4669835847",
+    "habilitado": true
   }
 }

@@ -95,7 +95,6 @@ dist/
 downloads/
 wheels/
 *.manifest
-*.spec
 *.tmp
 pip-wheel-metadata/
 *.log
