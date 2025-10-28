@@ -225,17 +225,51 @@ class TelegramNotifier:
 
 def carregar_config_telegram():
     """
-    Carrega configurações do Telegram do arquivo config.json
+    Carrega configurações do Telegram do arquivo config.json ou config_TESTE.json
 
     Returns:
         dict: Configurações do Telegram ou None se não existir
     """
-    try:
-        with open("config.json", "r", encoding="utf-8") as f:
-            config = json.load(f)
-            return config.get("telegram", None)
-    except:
-        return None
+    import os
+    import sys
+
+    # Tentar múltiplos caminhos para config.json E config_TESTE.json
+    config_names = ["config_TESTE.json", "config.json"]  # Tenta TESTE primeiro, depois PROD
+    caminhos_possiveis = []
+
+    for config_name in config_names:
+        caminhos_possiveis.extend([
+            config_name,  # Diretório atual
+            os.path.join(os.getcwd(), config_name),  # Current working directory
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), config_name),  # Mesmo dir do script
+        ])
+
+        # Se rodando como executável, adicionar pasta do executável e _internal
+        if getattr(sys, 'frozen', False):
+            exe_dir = os.path.dirname(sys.executable)
+            caminhos_possiveis.extend([
+                os.path.join(exe_dir, config_name),  # Pasta do .exe
+                os.path.join(exe_dir, "_internal", config_name),  # Dentro de _internal
+                os.path.join(sys._MEIPASS, config_name),  # Pasta temporária do PyInstaller
+            ])
+
+    for caminho in caminhos_possiveis:
+        if os.path.exists(caminho):
+            try:
+                print(f"[TELEGRAM] Tentando carregar config de: {os.path.basename(caminho)}")
+                with open(caminho, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                    telegram_config = config.get("telegram", None)
+                    if telegram_config:
+                        print(f"[TELEGRAM] ✅ Config carregado de: {os.path.basename(caminho)}")
+                        return telegram_config
+            except Exception as e:
+                print(f"[TELEGRAM] ⚠️ Erro ao ler {os.path.basename(caminho)}: {e}")
+
+    print(f"[TELEGRAM] ❌ Config não encontrado em nenhum caminho")
+    print(f"[TELEGRAM] Procurado: config_TESTE.json e config.json")
+
+    return None
 
 
 # Instância global do notificador (será inicializada no main_ciclo.py)
@@ -255,14 +289,20 @@ def inicializar_telegram():
     if config:
         bot_token = config.get("bot_token")
         chat_id = config.get("chat_id")
+        habilitado = config.get("habilitado", True)  # Padrão True se não especificado
 
         # Debug: mostrar o que foi carregado
         print(f"[DEBUG] Config Telegram carregado:")
-        print(f"  bot_token type: {type(bot_token)}, value: {bot_token}")
-        print(f"  chat_id type: {type(chat_id)}, value: {chat_id}")
-        print(f"  bot_token and chat_id = {bool(bot_token and chat_id)}")
+        print(f"  bot_token: {bot_token[:20] if bot_token else 'None'}...")
+        print(f"  chat_id: {chat_id}")
+        print(f"  habilitado: {habilitado}")
 
-        telegram_notifier = TelegramNotifier(bot_token, chat_id)
+        # Se habilitado for False no config, criar notificador desabilitado
+        if not habilitado:
+            print(f"[DEBUG] Telegram desabilitado no config.json (habilitado=false)")
+            telegram_notifier = TelegramNotifier(None, None)
+        else:
+            telegram_notifier = TelegramNotifier(bot_token, chat_id)
 
         print(f"[DEBUG] Notificador criado:")
         print(f"  enabled: {telegram_notifier.enabled}")

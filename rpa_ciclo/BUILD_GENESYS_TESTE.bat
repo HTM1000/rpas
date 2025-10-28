@@ -3,14 +3,17 @@ chcp 65001 >nul
 cls
 
 echo ╔════════════════════════════════════════════════════════════════╗
-echo ║                    BUILD GENESYS v3.0                          ║
-echo ║         RPA Ciclo com Validação por Imagem                     ║
+echo ║                    BUILD GENESYS TESTE v3.0                    ║
+echo ║         RPA Ciclo com Validação por Imagem - TESTE            ║
 echo ╚════════════════════════════════════════════════════════════════╝
 echo.
-echo NOVO na v3.0:
+echo VERSÃO TESTE:
+echo   ✨ Usa planilha de teste (147AN4Kn11T2qGyzTQgdqJ0QfSIt9TATEi0lw9zwMnpY)
 echo   ✨ Validação de tela antes do preenchimento
 echo   ✨ Confirmação de salvamento via imagem
 echo   ✨ Detecção de queda de rede
+echo   ✨ Notificações Telegram habilitadas
+echo   ✨ Tecla ESC para parar o RPA
 echo.
 
 REM ===== VERIFICAR SE PYTHON ESTÁ INSTALADO =====
@@ -90,8 +93,8 @@ echo ✓ Todas as imagens obrigatórias estão presentes
 echo.
 
 REM ===== MATAR PROCESSO SE ESTIVER RODANDO =====
-echo [2/7] Verificando se Genesys.exe está rodando...
-taskkill /F /IM Genesys.exe >nul 2>&1
+echo [2/7] Verificando se Genesys_TESTE.exe está rodando...
+taskkill /F /IM Genesys_TESTE.exe >nul 2>&1
 if errorlevel 1 (
     echo ✓ Processo não estava rodando
 ) else (
@@ -101,7 +104,7 @@ if errorlevel 1 (
 echo.
 
 REM ===== LIMPAR BUILD ANTERIOR =====
-echo [3/7] Limpando builds anteriores...
+echo [3/7] Limpando builds anteriores de TESTE...
 if exist "build" (
     rmdir /S /Q build 2>nul
     if errorlevel 1 (
@@ -111,29 +114,29 @@ if exist "build" (
         echo ✓ Pasta build removida
     )
 )
-if exist "dist\Genesys" (
-    rmdir /S /Q dist\Genesys 2>nul
+if exist "dist\Genesys_TESTE" (
+    rmdir /S /Q dist\Genesys_TESTE 2>nul
     if errorlevel 1 (
-        echo ⚠️ Não foi possível remover dist\Genesys (pode estar em uso)
+        echo ⚠️ Não foi possível remover dist\Genesys_TESTE (pode estar em uso)
         echo    Feche todos os programas e tente novamente
         echo    Ou navegue até a pasta e delete manualmente
         pause
         exit /b 1
     ) else (
-        echo ✓ Pasta dist\Genesys removida
+        echo ✓ Pasta dist\Genesys_TESTE removida
     )
 )
 echo.
 
 REM ===== EXECUTAR BUILD =====
-echo [4/7] Iniciando build com PyInstaller...
+echo [4/7] Iniciando build TESTE com PyInstaller...
 echo.
 echo ┌────────────────────────────────────────────────────────────┐
 echo │ Aguarde... Este processo pode levar alguns minutos        │
 echo └────────────────────────────────────────────────────────────┘
 echo.
 
-python -m PyInstaller --clean -y Genesys.spec
+python -m PyInstaller --clean -y Genesys_TESTE.spec
 
 if errorlevel 1 (
     echo.
@@ -145,33 +148,33 @@ if errorlevel 1 (
 
 REM ===== VERIFICAR SE O BUILD FOI CRIADO =====
 echo.
-echo [5/7] Verificando build...
-if not exist "dist\Genesys\Genesys.exe" (
-    echo ❌ ERRO: Executável não foi criado!
+echo [5/7] Verificando build TESTE...
+if not exist "dist\Genesys_TESTE\Genesys_TESTE.exe" (
+    echo ❌ ERRO: Executável TESTE não foi criado!
     pause
     exit /b 1
 )
-echo ✓ Executável criado com sucesso
+echo ✓ Executável TESTE criado com sucesso
 echo.
 
 REM ===== VERIFICAR SE AS IMAGENS FORAM INCLUÍDAS =====
-echo [6/7] Verificando imagens no build...
-if not exist "dist\Genesys\_internal\informacoes\qtd_negativa.png" (
+echo [6/7] Verificando imagens no build TESTE...
+if not exist "dist\Genesys_TESTE\_internal\informacoes\qtd_negativa.png" (
     echo ⚠️ AVISO: qtd_negativa.png não foi incluída no build!
 ) else (
     echo ✓ qtd_negativa.png incluída
 )
-if not exist "dist\Genesys\_internal\informacoes\ErroProduto.png" (
+if not exist "dist\Genesys_TESTE\_internal\informacoes\ErroProduto.png" (
     echo ⚠️ AVISO: ErroProduto.png não foi incluída no build!
 ) else (
     echo ✓ ErroProduto.png incluída
 )
-if not exist "dist\Genesys\_internal\informacoes\tempo_oracle.png" (
+if not exist "dist\Genesys_TESTE\_internal\informacoes\tempo_oracle.png" (
     echo ⚠️ AVISO: tempo_oracle.png não foi incluída no build!
 ) else (
     echo ✓ tempo_oracle.png incluída
 )
-if not exist "dist\Genesys\_internal\informacoes\tela_transferencia_subinventory.png" (
+if not exist "dist\Genesys_TESTE\_internal\informacoes\tela_transferencia_subinventory.png" (
     echo ❌ ERRO CRÍTICO: tela_transferencia_subinventory.png não foi incluída!
     echo    O RPA NÃO FUNCIONARÁ sem esta imagem!
     pause
@@ -179,7 +182,7 @@ if not exist "dist\Genesys\_internal\informacoes\tela_transferencia_subinventory
 ) else (
     echo ✓ tela_transferencia_subinventory.png incluída (NOVA v3.0)
 )
-if not exist "dist\Genesys\_internal\informacoes\queda_rede.png" (
+if not exist "dist\Genesys_TESTE\_internal\informacoes\queda_rede.png" (
     echo ⚠️ AVISO: queda_rede.png não foi incluída no build
 ) else (
     echo ✓ queda_rede.png incluída (NOVA v3.0)
@@ -194,8 +197,8 @@ if errorlevel 1 goto FAZER_COPIA
 
 :FAZER_COPIA
 echo.
-echo Copiando para C:\Users\ID135\Desktop\Genesys...
-xcopy "dist\Genesys" "C:\Users\ID135\Desktop\Genesys" /E /I /Y >nul
+echo Copiando para C:\Users\ID135\Desktop\Genesys_TESTE...
+xcopy "dist\Genesys_TESTE" "C:\Users\ID135\Desktop\Genesys_TESTE" /E /I /Y >nul
 if errorlevel 1 (
     echo ⚠️ Erro ao copiar. Verifique permissões
 ) else (
@@ -209,19 +212,25 @@ echo ℹ️ Cópia para Desktop ignorada
 :FIM
 echo.
 echo ╔════════════════════════════════════════════════════════════════╗
-echo ║                  ✓ BUILD CONCLUÍDO COM SUCESSO!                ║
+echo ║          ✓ BUILD TESTE CONCLUÍDO COM SUCESSO!                  ║
 echo ╚════════════════════════════════════════════════════════════════╝
 echo.
-echo 📁 Localização: dist\Genesys\
-echo 📦 Executável: dist\Genesys\Genesys.exe
+echo 📁 Localização: dist\Genesys_TESTE\
+echo 📦 Executável: dist\Genesys_TESTE\Genesys_TESTE.exe
 echo.
-echo ⚠️ IMPORTANTE: Distribua a PASTA COMPLETA "Genesys", não apenas o .exe
+echo ⚠️ IMPORTANTE: Distribua a PASTA COMPLETA "Genesys_TESTE", não apenas o .exe
 echo.
 echo Arquivos incluídos:
-echo   - Genesys.exe (executável principal)
+echo   - Genesys_TESTE.exe (executável principal - VERSÃO TESTE)
 echo   - _internal\ (dependências e imagens)
 echo   - config.json (configurações)
 echo   - CredenciaisOracle.json (credenciais Google)
 echo   - Logo.png, Tecumseh.png, Topo.png
+echo.
+echo 🔥 DIFERENÇAS DA VERSÃO TESTE:
+echo   - Usa planilha de teste (147AN4Kn11T2qGyzTQgdqJ0QfSIt9TATEi0lw9zwMnpY)
+echo   - Cache separado (processados.json)
+echo   - Notificações Telegram habilitadas
+echo   - ESC para parar funcionando
 echo.
 pause

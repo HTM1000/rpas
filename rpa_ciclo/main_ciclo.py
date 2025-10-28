@@ -76,13 +76,49 @@ except ImportError as e:
     PYTESSERACT_DISPONIVEL = False
     print(f"[WARN] pytesseract não disponível: {e}")
 
+# =================== DETECTAR MODO TESTE ===================
+def detectar_modo_teste():
+    """Detecta se está em modo TESTE verificando se existe o arquivo IS_TEST_MODE.flag"""
+    # Verificar em vários locais possíveis
+    locais = [
+        base_path,  # _MEIPASS (dentro do executável)
+        BASE_DIR,   # Diretório base
+    ]
+
+    if getattr(sys, 'frozen', False):
+        locais.append(os.path.dirname(sys.executable))  # Pasta do .exe
+        locais.append(os.path.join(os.path.dirname(sys.executable), "_internal"))  # _internal/
+
+    for local in locais:
+        flag_path = os.path.join(local, "IS_TEST_MODE.flag")
+        if os.path.exists(flag_path):
+            print(f"[TESTE] Flag detectada em: {flag_path}")
+            return True
+
+    print("[PROD] Flag de teste NÃO detectada - usando modo PRODUÇÃO")
+    return False
+
+MODO_TESTE_ATIVO = detectar_modo_teste()
+
 # Importar módulo Google Sheets (para ciclo)
 try:
-    from google_sheets_ciclo import registrar_ciclo, atualizar_ciclo
+    if MODO_TESTE_ATIVO:
+        from google_sheets_ciclo_TESTE import registrar_ciclo, atualizar_ciclo
+        print("[TESTE] Importado: google_sheets_ciclo_TESTE.py")
+    else:
+        from google_sheets_ciclo import registrar_ciclo, atualizar_ciclo
+        print("[PROD] Importado: google_sheets_ciclo.py")
     GOOGLE_SHEETS_DISPONIVEL = True
-except ImportError:
-    GOOGLE_SHEETS_DISPONIVEL = False
-    print("⚠️ Google Sheets (ciclo) não disponível")
+except ImportError as e:
+    print(f"❌ Erro ao importar Google Sheets: {e}")
+    # Fallback: tentar importar qualquer um
+    try:
+        from google_sheets_ciclo import registrar_ciclo, atualizar_ciclo
+        GOOGLE_SHEETS_DISPONIVEL = True
+        print("[FALLBACK] Usando google_sheets_ciclo.py")
+    except:
+        GOOGLE_SHEETS_DISPONIVEL = False
+        print("⚠️ Google Sheets (ciclo) não disponível")
 
 # Importar módulo Google Sheets (para bancada)
 try:
@@ -248,11 +284,52 @@ def gui_log(msg):
     else:
         print(msg)
 
+def notificar_parada_telegram(motivo, detalhes=""):
+    """
+    Notifica parada do RPA no Telegram
+
+    Args:
+        motivo: Motivo da parada (ESC, FAILSAFE, ERRO, BOTAO_PARAR)
+        detalhes: Detalhes adicionais (opcional)
+    """
+    global _telegram_notifier
+    if _telegram_notifier and _telegram_notifier.enabled:
+        try:
+            icones = {
+                "ESC": "⏹️",
+                "FAILSAFE": "🛑",
+                "ERRO": "❌",
+                "BOTAO_PARAR": "⏸️",
+                "ERRO_PRODUTO": "⚠️",
+                "TIMEOUT": "⏱️",
+                "QTD_NEGATIVA": "🔢",
+                "TELA_INCORRETA": "🖥️"
+            }
+
+            icone = icones.get(motivo, "🛑")
+
+            mensagem = f"""
+{icone} <b>RPA PARADO</b>
+
+🔴 <b>Motivo:</b> {motivo.replace('_', ' ')}
+"""
+            if detalhes:
+                mensagem += f"📝 <b>Detalhes:</b> {detalhes}\n"
+
+            mensagem += f"\n⏰ {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
+
+            _telegram_notifier.enviar_mensagem(mensagem.strip())
+        except Exception as e:
+            gui_log(f"[TELEGRAM] Erro ao notificar parada: {e}")
+
 def stop_rpa():
     """Para o RPA externamente (para ser chamado pela GUI)"""
     global _rpa_running
     _rpa_running = False
     gui_log("🛑 Solicitação de parada recebida")
+
+    # Notificar Telegram
+    notificar_parada_telegram("BOTAO_PARAR", "Usuário clicou no botão PARAR")
 
     # 🔧 CORREÇÃO CRÍTICA: Forçar parada após 3 segundos se não parar naturalmente
     import threading
@@ -273,22 +350,53 @@ def is_rpa_running():
 
 # =================== CARREGAMENTO DE CONFIGURAÇÃO ===================
 def carregar_config():
-    """Carrega as configurações do arquivo config.json"""
-    try:
-        config_path = os.path.join(base_path, "config.json")
-        if not os.path.exists(config_path):
-            config_path = CONFIG_FILE
+    """Carrega as configurações do arquivo config.json ou config_TESTE.json"""
+    # Determinar qual arquivo de config usar
+    config_filename = "config_TESTE.json" if MODO_TESTE_ATIVO else "config.json"
 
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-        gui_log("✅ Configurações carregadas")
-        return config
-    except FileNotFoundError:
-        gui_log(f"❌ Arquivo de configuração não encontrado: {CONFIG_FILE}")
-        raise
-    except json.JSONDecodeError as e:
-        gui_log(f"❌ Erro ao decodificar JSON: {e}")
-        raise
+    gui_log(f"🔍 Modo: {'TESTE' if MODO_TESTE_ATIVO else 'PRODUÇÃO'}")
+    gui_log(f"🔍 Procurando arquivo: {config_filename}")
+
+    # Tentar múltiplos caminhos
+    caminhos_possiveis = [
+        os.path.join(base_path, config_filename),  # _MEIPASS (interno do PyInstaller)
+        os.path.join(BASE_DIR, config_filename),  # BASE_DIR
+        os.path.join(os.path.dirname(sys.executable), config_filename) if getattr(sys, 'frozen', False) else None,  # Pasta do .exe
+        os.path.join(os.path.dirname(sys.executable), "_internal", config_filename) if getattr(sys, 'frozen', False) else None,  # _internal
+    ]
+
+    # Remover Nones
+    caminhos_possiveis = [c for c in caminhos_possiveis if c]
+
+    gui_log(f"🔍 Caminhos que vou verificar:")
+    for i, caminho in enumerate(caminhos_possiveis, 1):
+        existe = "✅" if os.path.exists(caminho) else "❌"
+        gui_log(f"   {i}. {existe} {caminho}")
+
+    for config_path in caminhos_possiveis:
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                gui_log(f"✅ Configurações carregadas de: {os.path.basename(config_path)}")
+
+                # Verificar se tem ID da planilha Oracle
+                if "planilhas" in config and "oracle_itens" in config["planilhas"]:
+                    planilha_id = config["planilhas"]["oracle_itens"]
+                    # Mostrar apenas primeiros caracteres (não mostrar ID completo)
+                    gui_log(f"📊 Planilha Oracle Itens: ...{planilha_id[-8:]}")
+                else:
+                    gui_log(f"⚠️ Planilha Oracle não configurada no {config_filename}")
+
+                return config
+            except json.JSONDecodeError as e:
+                gui_log(f"❌ Erro ao decodificar JSON em {config_path}: {e}")
+                continue
+
+    # Se chegou aqui, não encontrou em nenhum lugar
+    gui_log(f"❌ Arquivo de configuração não encontrado!")
+    gui_log(f"   Arquivo procurado: {config_filename}")
+    raise FileNotFoundError(f"{config_filename} não encontrado")
 
 # =================== FUNÇÕES AUXILIARES ===================
 def indice_para_coluna(idx):
@@ -1291,6 +1399,7 @@ def verificar_erro_produto(service, range_str, linha_atual):
 
         _rpa_running = False
         gui_log("🛑 [ERRO PRODUTO] Detectado - Robô parado!")
+        notificar_parada_telegram("ERRO_PRODUTO", f"Produto inválido detectado - Linha {linha_atual}")
         return True
 
     return False
@@ -1447,6 +1556,7 @@ def verificar_tempo_oracle(service, range_str, linha_atual):
                 _rpa_running = False
                 gui_log("[TEMPO_ORACLE] 🛑 Aplicação será parada!")
                 gui_log("[TEMPO_ORACLE] 🔄 AÇÃO NECESSÁRIA: Reabra o sistema Oracle e execute novamente")
+                notificar_parada_telegram("TIMEOUT", f"Sistema Oracle expirou - Linha {linha_atual}")
                 return True
             else:
                 gui_log("[TEMPO_ORACLE] ✅ Nenhum timeout detectado (imagem não encontrada)")
@@ -1551,7 +1661,16 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
 
         # Autenticar Google Sheets
         SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-        SPREADSHEET_ID = "14yUMc12iCQxqVzGTBvY6g9bIFfMhaQZ26ydJk_4ZeDk"  # PLANILHA PRODUÇÃO ORACLE
+
+        # Obter ID da planilha Oracle do config
+        if "planilhas" in config and "oracle_itens" in config["planilhas"]:
+            SPREADSHEET_ID = config["planilhas"]["oracle_itens"]
+            gui_log(f"📊 Usando planilha Oracle (do config): ...{SPREADSHEET_ID[-8:]}")
+        else:
+            # Fallback para produção se não configurado
+            SPREADSHEET_ID = "14yUMc12iCQxqVzGTBvY6g9bIFfMhaQZ26ydJk_4ZeDk"
+            gui_log(f"⚠️ Planilha Oracle não configurada, usando padrão (PROD)")
+
         SHEET_NAME = "Separação"
 
         token_path = os.path.join(BASE_DIR, "token.json")
@@ -1737,10 +1856,10 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
                     motivo = "Retry após timeout Oracle (sistema reaberto)"
                     gui_log(f"🔄 [RETRY] Linha {i+2} (ID: {id_linha_temp}) com timeout Oracle - será reprocessada")
                 elif "Tela incorreta" in status_oracle or "tela incorreta" in status_oracle.lower():
-                    # Retry de erro de tela incorreta (mas vai PARAR quando processar)
-                    processar = True
-                    motivo = "Retry de erro de tela incorreta (corrigido manualmente)"
-                    gui_log(f"🔄 [RETRY] Linha {i+2} (ID: {id_linha_temp}) com erro de tela - será reprocessada")
+                    # NÃO fazer retry de tela incorreta - requer correção manual
+                    processar = False
+                    gui_log(f"⏭️ [SKIP] Linha {i+2} (ID: {id_linha_temp}) com erro de tela incorreta - CORREÇÃO MANUAL NECESSÁRIA")
+                    gui_log(f"⚠️ Tela incorreta requer intervenção manual. Não será reprocessada automaticamente.")
                 elif status_oracle in mensagens_erro_retry:
                     # Match exato
                     processar = True
@@ -2407,6 +2526,7 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
                                             if event.name == 'esc' and event.event_type == 'down':
                                                 gui_log("⚠️ [ESC] TECLA ESC PRESSIONADA - PARANDO RPA...")
                                                 _rpa_running = False
+                                                notificar_parada_telegram("ESC", "Tecla ESC pressionada durante validação")
                                                 keyboard.unhook_all()
                                         keyboard.hook(parar_callback_reativado)
                                         gui_log("[VALIDADOR] ✅ Hook do teclado reativado")
@@ -2574,6 +2694,7 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
                                         if event.name == 'esc' and event.event_type == 'down':
                                             gui_log("⚠️ [ESC] TECLA ESC PRESSIONADA - PARANDO RPA...")
                                             _rpa_running = False
+                                            notificar_parada_telegram("ESC", "Tecla ESC pressionada durante salvamento")
                                             keyboard.unhook_all()
                                     keyboard.hook(parar_callback_reativado)
                                     gui_log("[SAVE] ✅ Hook do teclado reativado")
@@ -2771,6 +2892,7 @@ def etapa_06_navegacao_pos_oracle(config):
             gui_log(f"   Mouse estava no canto superior esquerdo: {e}")
             gui_log("   Mova o mouse para longe do canto (0,0) e tente novamente")
             _rpa_running = False
+            notificar_parada_telegram("FAILSAFE", "Mouse no canto superior esquerdo (0,0) - PASSO 4/6")
             return False
         except Exception as e:
             gui_log(f"❌ [PASSO 4/6] ERRO ao clicar em 'Janela': {e}")
@@ -2795,6 +2917,7 @@ def etapa_06_navegacao_pos_oracle(config):
         except pyautogui.FailSafeException:
             gui_log("🛑 [PASSO 5/6] FAILSAFE acionado ao clicar no menu")
             _rpa_running = False
+            notificar_parada_telegram("FAILSAFE", "Mouse no canto superior esquerdo (0,0) - PASSO 5/6")
             return False
 
         if not aguardar_com_pausa(tempo_espera, "Aguardando menu abrir"):
@@ -2815,6 +2938,7 @@ def etapa_06_navegacao_pos_oracle(config):
         except pyautogui.FailSafeException:
             gui_log("🛑 [PASSO 6/6] FAILSAFE acionado ao abrir bancada")
             _rpa_running = False
+            notificar_parada_telegram("FAILSAFE", "Mouse no canto superior esquerdo (0,0) - PASSO 6/6")
             return False
         except Exception as e:
             gui_log(f"❌ [PASSO 6/6] Erro ao abrir bancada: {e}")
@@ -3002,10 +3126,18 @@ def salvar_excel_bancada(df):
         gui_log("❌ pandas não disponível - não é possível salvar Excel")
         return None
 
-    # Criar pasta out/ se não existir
-    base_dir = Path(base_path)
+    # Criar pasta out/ na PASTA DO EXECUTÁVEL (não na pasta interna)
+    # Se rodando como .exe, usar pasta do executável; senão, pasta do script
+    if getattr(sys, 'frozen', False):
+        # Executando como .exe - usar pasta do executável
+        base_dir = Path(sys.executable).parent
+    else:
+        # Executando como script - usar pasta do script
+        base_dir = Path(__file__).parent
+
     out_dir = base_dir / "out"
     out_dir.mkdir(exist_ok=True)
+    gui_log(f"📁 [DEBUG] Salvando Excel em: {out_dir}")
 
     hoje = pd.Timestamp.now().strftime("%Y-%m-%d")
     xlsx = out_dir / f"bancada-{hoje}.xlsx"
@@ -3335,17 +3467,61 @@ def etapa_07_executar_rpa_bancada(config):
             gui_log("")
             gui_log("☁️ Enviando dados para Google Sheets...")
 
+            # Notificar início do envio
+            if _telegram_notifier and _telegram_notifier.enabled:
+                try:
+                    _telegram_notifier.enviar_mensagem(
+                        f"📤 <b>ENVIANDO BANCADA PARA GOOGLE SHEETS</b>\n\n"
+                        f"📊 <b>Registros:</b> {len(df)}\n"
+                        f"⏰ {datetime.now().strftime('%H:%M:%S')}"
+                    )
+                except:
+                    pass
+
             try:
                 sucesso_sheets = enviar_para_google_sheets(df)
 
                 if sucesso_sheets:
                     gui_log("✅ Dados enviados para Google Sheets com sucesso!")
+
+                    # Notificar sucesso do envio
+                    if _telegram_notifier and _telegram_notifier.enabled:
+                        try:
+                            _telegram_notifier.enviar_mensagem(
+                                f"✅ <b>BANCADA ENVIADA COM SUCESSO</b>\n\n"
+                                f"📊 <b>Registros:</b> {len(df)}\n"
+                                f"⏰ {datetime.now().strftime('%H:%M:%S')}"
+                            )
+                        except:
+                            pass
                 else:
                     gui_log("❌ Falha ao enviar para Google Sheets")
+
+                    # Notificar falha do envio
+                    if _telegram_notifier and _telegram_notifier.enabled:
+                        try:
+                            _telegram_notifier.enviar_mensagem(
+                                f"❌ <b>FALHA AO ENVIAR BANCADA</b>\n\n"
+                                f"📊 <b>Registros:</b> {len(df)}\n"
+                                f"⏰ {datetime.now().strftime('%H:%M:%S')}"
+                            )
+                        except:
+                            pass
             except Exception as e:
                 gui_log(f"❌ Erro ao enviar para Google Sheets: {e}")
                 import traceback
                 gui_log(traceback.format_exc())
+
+                # Notificar erro do envio
+                if _telegram_notifier and _telegram_notifier.enabled:
+                    try:
+                        _telegram_notifier.enviar_mensagem(
+                            f"❌ <b>ERRO AO ENVIAR BANCADA</b>\n\n"
+                            f"⚠️ <b>Erro:</b> {str(e)[:100]}\n"
+                            f"⏰ {datetime.now().strftime('%H:%M:%S')}"
+                        )
+                    except:
+                        pass
         else:
             if not GOOGLE_SHEETS_BANCADA_DISPONIVEL:
                 gui_log("⚠️ Google Sheets (bancada) não configurado")
@@ -3606,6 +3782,7 @@ def monitorar_tecla_esc():
             gui_log("⚠️  [ESC] TECLA ESC PRESSIONADA - PARANDO RPA...")
             gui_log("━" * 70)
             _rpa_running = False
+            notificar_parada_telegram("ESC", "Tecla ESC pressionada pelo usuário")
             try:
                 keyboard.unhook_all()
                 gui_log("🛑 [ESC] Hook removido com sucesso")
@@ -3922,24 +4099,6 @@ def main(modo_continuo=True):
                 if not _rpa_running:
                     break
 
-            # Fim do loop contínuo (saiu por falha crítica ou parada manual)
-            if False:  # Placeholder para manter estrutura
-                    # FALHA CRÍTICA: Parar imediatamente e avisar usuário
-                    gui_log("=" * 60)
-                    gui_log("❌ FALHA CRÍTICA DETECTADA!")
-                    gui_log("=" * 60)
-                    gui_log("🛑 RPA foi interrompido automaticamente")
-                    gui_log("📋 Verifique os logs acima para identificar o problema")
-                    gui_log("⚠️ Pode ser:")
-                    gui_log("   - Falha ao processar itens no Oracle")
-                    gui_log("   - Falha ao executar RPA Bancada")
-                    gui_log("   - Problema de conexão com Google Sheets")
-                    gui_log("   - Erro de coordenadas/cliques")
-                    gui_log("=" * 60)
-                    break  # PARAR IMEDIATAMENTE
-
-                if not _rpa_running:
-                    break
         else:
             gui_log("🎯 Modo execução única")
             executar_ciclo_completo(config)
