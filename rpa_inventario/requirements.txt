@@ -1,0 +1,25 @@
+# RPA Inventário - Dependências
+# Compatível com Python 3.11, 3.12 e 3.13
+
+# Automação Desktop (com detecção de imagem)
+pyautogui>=0.9.54
+pyperclip>=1.8.2
+
+# Google Sheets
+google-auth>=2.25.2
+google-auth-oauthlib>=1.2.0
+google-auth-httplib2>=0.2.0
+google-api-python-client>=2.111.0
+
+# Interface gráfica e processamento de imagem
+Pillow>=10.4.0
+opencv-python>=4.10.0.84
+
+# Controle de teclado
+keyboard>=0.13.5
+
+# Processamento de dados
+pandas>=2.2.0
+
+# Build
+pyinstaller>=6.10.0

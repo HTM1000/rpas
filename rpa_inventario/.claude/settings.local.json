@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(findstr:*)",
+      "Bash(dir \"C:\\Users\\ID135\\OneDrive\\Desktop\\www\\rpas\\rpa_inventario\" /b)",
+      "Bash(ren:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

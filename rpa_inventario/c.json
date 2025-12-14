@@ -1,0 +1,35 @@
+{
+    "passo1": {
+        "x": 247,
+        "y": 135,
+        "Descrição": "Clicar input Nome"
+      },
+      "passo2": {
+        "x": 686,
+        "y": 168,
+        "Descrição": "Clicar botão Localizar"
+      },
+      "passo3": {
+        "x": 1074,
+        "y": 564,
+        "Descrição": "Clicar botão Sim"
+      },
+      "passo4": {
+        "x": 1074,
+        "y": 564,
+        "Descrição": "Clicar botão Sim"
+      },
+      "passo5": {
+        "x": 65,
+        "y": 289,
+        "Descrição": "Clicar input Etiqueta"
+      },
+      "passo6": {
+        "tabs": 5
+      },
+      "passo7": {
+        "x": 110,
+        "y": 66,
+        "Descrição": "Clicar botão Salvar"
+  }
+}

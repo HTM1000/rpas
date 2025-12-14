@@ -1,0 +1,32 @@
+{
+  "comentario": "Configurações do RPA Inventário",
+  "url": "",
+  "headless": false,
+  "timeout_padrao": 30000,
+  "delays": {
+    "entre_cliques": 2,
+    "apos_preencher": 1,
+    "apos_login": 3,
+    "apos_tab": 0.5,
+    "apos_enter": 1
+  },
+  "google_sheets": {
+    "planilha_primeira_contagem": "1iZYNC1eMmpn8Evb6mAxzF1qZwug7xeO6LyOs3sWBbL4",
+    "planilha_segunda_contagem": "1rg9ExuM0auBC_HROBLu1wCwxz5X6hcUqgG10YdgcXk4"
+  },
+  "seletores": {
+    "comentario": "Seletores XPATH para localizar elementos (funciona em qualquer resolução)",
+    "input_nome": "//label[contains(text(), 'Nome')]/following::input[1]",
+    "botao_localizar": "//button[contains(text(), 'Localizar')]",
+    "botao_sim_popup": "//button[contains(text(), 'Sim')]",
+    "input_etiqueta": "//label[contains(text(), 'Etiqueta')]/following::input[1]",
+    "botao_salvar": "//button[@title='Salvar' or @aria-label='Salvar']",
+    "comentario_salvar": "IMPORTANTE: Ajuste o seletor do botão Salvar conforme o elemento real"
+  },
+  "automacao": {
+    "tabs_apos_etiqueta": 5,
+    "delay_apos_salvar": 1,
+    "delay_apos_popup": 1,
+    "timeout_elementos": 10
+  }
+}
