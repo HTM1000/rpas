@@ -248,6 +248,88 @@ def delay_randomico(min_seg=0.5, max_seg=2.0):
     delay = random.uniform(min_seg, max_seg)
     time.sleep(delay)
 
+# ─── DETECÇÃO DE ERROS MODAIS ──────────────────────────────────────────────
+def gerar_status_erro(erro_imagem: str) -> str:
+    """
+    Converte nome da imagem de erro para status legível
+
+    Examples:
+        erro_item_inexistente.png → "Erro: Item Inexistente"
+        login_expirado.png → "Login Oracle Expirado"
+    """
+    if "login" in erro_imagem.lower():
+        return "Login Oracle Expirado"
+
+    # Remove .png e substitui underscores
+    status = erro_imagem.replace(".png", "").replace("_", " ")
+
+    # Capitaliza palavras
+    status_parts = status.split()
+    status_formatted = " ".join(word.title() for word in status_parts)
+
+    return f"Erro: {status_formatted.replace('Erro ', '')}"
+
+def verificar_erro_modal(checkpoint_name: str):
+    """
+    Verifica se um modal de erro apareceu na tela
+
+    Args:
+        checkpoint_name: Nome do checkpoint (after_item, after_endereco, etc.)
+
+    Returns:
+        Nome da imagem do erro detectado ou None
+    """
+    config_erro = CONFIG.get('erro_detection', {})
+    imagens_erro = config_erro.get('checkpoints', {}).get(checkpoint_name, [])
+    confianca = config_erro.get('confianca_padrao', 0.8)
+    timeout = config_erro.get('timeout_per_check', 1.5)
+
+    log(f"🔍 Checkpoint '{checkpoint_name}': verificando {len(imagens_erro)} erros possíveis...")
+
+    for imagem_erro in imagens_erro:
+        posicao = localizar_imagem(imagem_erro, confianca=confianca, timeout=timeout)
+        if posicao:
+            log(f"🚨 Erro detectado: {imagem_erro}")
+            return imagem_erro
+
+    log(f"✅ Checkpoint '{checkpoint_name}': nenhum erro detectado")
+    return None
+
+def pausar_por_erro(erro_detectado: str, item_id: str, checkpoint_name: str, tipo_contagem: str, tipo_planilha: str):
+    """
+    PARA O RPA COMPLETAMENTE quando erro é detectado
+
+    IMPORTANTE: Esta função PARA a execução do RPA completamente.
+    """
+    log("")
+    log("=" * 70)
+    log(f"🚨 ERRO DETECTADO: {erro_detectado}")
+    log("=" * 70)
+    log(f"📍 Local: {checkpoint_name}")
+    log(f"📋 Item ID: {item_id}")
+    log("")
+    log("⚠️ Modal de erro detectado - verifique os dados antes de continuar")
+    log("🛑 RPA PARADO COMPLETAMENTE - Resolva o erro manualmente e execute novamente")
+    log("🛑 O ROBÔ NÃO CONTINUARÁ PROCESSANDO OUTROS ITENS")
+    log("=" * 70)
+    log("")
+
+    # Marcar item com erro específico
+    if item_id:
+        status_erro = gerar_status_erro(erro_detectado)
+        import google_sheets_inventario as gsheets
+        gsheets.atualizar_status_rpa(
+            item_id=item_id,
+            status=status_erro,
+            tipo_contagem=tipo_contagem,
+            tipo_planilha=tipo_planilha,
+            robo_id=_robo_id
+        )
+        log(f"✅ Item marcado como '{status_erro}' para reprocessamento")
+
+    # PARAR RPA COMPLETAMENTE
+    raise Exception(f"ERRO DETECTADO: {erro_detectado} no checkpoint {checkpoint_name}")
+
 # ─── FUNÇÃO PRINCIPAL ───────────────────────────────────────────────────────
 def main(inventario: str = "", robo_id: str = "PC-01", tipo_contagem: str = "primeira", tipo_planilha: str = "bc1", modo_teste: bool = False):
     """
@@ -627,19 +709,54 @@ def main(inventario: str = "", robo_id: str = "PC-01", tipo_contagem: str = "pri
                         digitar(item_valor, "Item")
                         log(f"✅ Item preenchido: {item_valor}")
 
-                        # TAB + Preencher Sub Inventário
+                        # TAB para próximo campo e aguardar validação
                         pressionar_tab(1)
+                        config_erro = CONFIG.get('erro_detection', {})
+                        wait_before_check = config_erro.get('wait_before_check', 0.5)
+                        esperar(wait_before_check, "aguardar validação do campo Item")
+
+                        # Verificar erro após preencher Item
+                        erro = verificar_erro_modal("after_item")
+                        if erro:
+                            pausar_por_erro(erro, item_id, "after_item", tipo_contagem, tipo_planilha)
+
+                        # Preencher Sub Inventário
                         digitar(subinventario, "Sub Inventário")
                         log(f"✅ Sub Inventário preenchido: {subinventario}")
 
-                        # TAB + Preencher Endereço
+                        # TAB para próximo campo e aguardar validação
                         pressionar_tab(1)
+                        esperar(wait_before_check, "aguardar validação do campo SubInventário")
+
+                        # Verificar erro após preencher SubInventário
+                        erro = verificar_erro_modal("after_subinventario")
+                        if erro:
+                            pausar_por_erro(erro, item_id, "after_subinventario", tipo_contagem, tipo_planilha)
+
+                        # Preencher Endereço
                         digitar(endereco, "Endereço")
                         log(f"✅ Endereço preenchido: {endereco}")
 
-                        # TAB + UDM (pular, não preencher)
+                        # TAB para próximo campo e aguardar validação
                         pressionar_tab(1)
+                        esperar(wait_before_check, "aguardar validação do campo Endereço")
+
+                        # Verificar erro após preencher Endereço
+                        erro = verificar_erro_modal("after_endereco")
+                        if erro:
+                            pausar_por_erro(erro, item_id, "after_endereco", tipo_contagem, tipo_planilha)
+
+                        # UDM (pular, não preencher)
                         log(f"⏭️ UDM (pulado)")
+
+                        # TAB e aguardar validação do UDM
+                        pressionar_tab(1)
+                        esperar(wait_before_check, "aguardar validação UDM")
+
+                        # Verificar erro após passar pelo UDM
+                        erro = verificar_erro_modal("after_udm")
+                        if erro:
+                            pausar_por_erro(erro, item_id, "after_udm", tipo_contagem, tipo_planilha)
 
                         # TAB + Preencher Quantidade (Físico)
                         pressionar_tab(1)
@@ -657,44 +774,18 @@ def main(inventario: str = "", robo_id: str = "PC-01", tipo_contagem: str = "pri
                 try:
                     log(f"[{index}/{total_itens}] 🔍 Verificando se login do Oracle expirou...")
 
-                    login_expirado = localizar_imagem("login_expirado.png", confianca=0.8, timeout=2)
+                    # REFATORADO: Usar função verificar_erro_modal
+                    erro = verificar_erro_modal("before_save")
 
-                    if login_expirado:
-                        # ============================================================
-                        # 🚨 LOGIN EXPIRADO - PARAR ROBÔ
-                        # ============================================================
-                        log("")
-                        log("=" * 70)
-                        log("🚨 LOGIN DO ORACLE EXPIRADO!")
-                        log("=" * 70)
-                        log(f"📋 Etiqueta: {etiqueta}")
-                        log("")
-                        log("⚠️ A sessão do Oracle expirou e precisa fazer login novamente")
-                        log("🛑 RPA INTERROMPIDO - Faça login no Oracle e execute novamente")
-                        log("=" * 70)
-                        log("")
-
-                        # Marcar item como "Login Oracle Expirado" (para reprocessar)
-                        if item_id:
-                            log(f"Marcando item como 'Login Oracle Expirado'...")
-                            gsheets.atualizar_status_rpa(
-                                item_id=item_id,
-                                status="Login Oracle Expirado",
-                                tipo_contagem=tipo_contagem,
-                                tipo_planilha=tipo_planilha,
-                                robo_id=_robo_id
-                            )
-                            log(f"✅ Item marcado - poderá ser reprocessado após login")
-
-                        # Parar o RPA completamente
-                        raise Exception("LOGIN DO ORACLE EXPIRADO - Faça login e execute novamente")
-
+                    if erro:
+                        # REFATORADO: Usar função pausar_por_erro
+                        pausar_por_erro(erro, item_id, "before_save", tipo_contagem, tipo_planilha)
                     else:
                         log(f"✅ Login OK - Continuando com salvamento")
 
                 except Exception as e:
-                    # Se for erro de login expirado, re-lançar para parar o RPA
-                    if "LOGIN DO ORACLE EXPIRADO" in str(e):
+                    # Se for erro de login expirado ou outro erro detectado, re-lançar
+                    if "ERRO DETECTADO" in str(e) or "LOGIN DO ORACLE EXPIRADO" in str(e):
                         raise
                     # Outros erros na verificação - apenas avisar e continuar
                     log(f"⚠️ Erro ao verificar login expirado: {e}")

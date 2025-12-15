@@ -28,5 +28,18 @@
     "delay_apos_salvar": 1,
     "delay_apos_popup": 1,
     "timeout_elementos": 10
+  },
+  "erro_detection": {
+    "comentario": "Configuração de detecção de erros por checkpoint",
+    "wait_before_check": 0.5,
+    "timeout_per_check": 1.5,
+    "confianca_padrao": 0.8,
+    "checkpoints": {
+      "after_item": ["erro_item_inexistente.png"],
+      "after_endereco": ["erro_endereco_inexistente.png"],
+      "after_subinventario": ["erro_subinventario_inexistente.png"],
+      "after_udm": ["erro_udm_inexistente.png"],
+      "before_save": ["login_expirado.png"]
+    }
   }
 }
