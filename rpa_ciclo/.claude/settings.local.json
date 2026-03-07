@@ -5,7 +5,21 @@
       "Read(//c/Users/ID135/OneDrive/Desktop/www/rpas/rpa_bancada/**)",
       "Bash(git log --all --format=\"%ai %H\" --name-only -- main.py main_v2.py)",
       "Read(//c/Users/ID135/OneDrive/Desktop/www/rpas/rpa_nfri/**)",
-      "Read(//c/Users/ID135/OneDrive/Desktop/www/rpas/**)"
+      "Read(//c/Users/ID135/OneDrive/Desktop/www/rpas/**)",
+      "Bash(dir /B /A)",
+      "Bash(cp:*)",
+      "Bash(dir:*)",
+      "Bash(cmd.exe /c BUILD_GENESYS.bat)",
+      "Bash(python apply_optimizations_simple.py:*)",
+      "Bash(cmd.exe /c BUILD_BANCADA_LOOP.bat)",
+      "Bash(python -m PyInstaller:*)",
+      "Bash(ls:*)",
+      "Bash(python:*)",
+      "Bash(BUILD_GENESYS.bat)",
+      "Bash(findstr:*)",
+      "Bash(powershell:*)",
+      "Bash(cmd.exe:*)",
+      "Bash(python3:*)"
     ],
     "deny": [],
     "ask": []

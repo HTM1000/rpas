@@ -1,0 +1,42 @@
+{
+  "coordenadas": {
+    "tela_07_bancada_material": {
+      "x": 598,
+      "y": 284,
+      "descricao": "Duplo clique em '4. Bancada de Material'",
+      "duplo_clique": true
+    },
+    "tela_08_fechar_bancada": {
+      "x": 746,
+      "y": 90,
+      "descricao": "Clique no X para fechar a Bancada"
+    },
+    "bancada_detalhado": {
+      "x": 273,
+      "y": 358,
+      "descricao": "Clique no botão Detalhado da Bancada"
+    },
+    "bancada_localizar": {
+      "x": 524,
+      "y": 689,
+      "descricao": "Clique no botão Localizar da Bancada"
+    },
+    "bancada_celula_org": {
+      "x": 318,
+      "y": 174,
+      "descricao": "Clique na primeira célula (Org) da grid"
+    }
+  },
+  "tempos_espera": {
+    "entre_cliques": 1.5,
+    "apos_modal": 5.0,
+    "apos_abrir_bancada": 3.0,
+    "apos_localizar": 120,
+    "comentario": "Tempos em segundos para aguardar entre operações. apos_localizar = tempo para grid carregar dados (~2min)"
+  },
+  "metadata": {
+    "versao": "RPA Bancada Loop 1.0",
+    "resolucao_recomendada": "1440x900",
+    "modo": "loop_infinito"
+  }
+}

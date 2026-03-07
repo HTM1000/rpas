@@ -1,0 +1,134 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                  🔧 CORREÇÃO - FALTAVA ENTER NO MODAL                      ║
+║                           13/01/2026 - 16:30                               ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+❌ PROBLEMA REPORTADO
+
+O usuário relatou:
+- ✅ Modal erro centro custo foi DETECTADO
+- ✅ Status Oracle foi ATUALIZADO para "Erro Centro de Custo"
+- ❌ MAS não pressionou ENTER (modal continuou aberto)
+- ❌ MAS não pressionou F6
+- ❌ MAS não pulou para próximo item
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔍 CAUSA RAIZ
+
+O código estava indo DIRETO para F6 sem fechar o modal primeiro:
+
+❌ FLUXO ERRADO (antes):
+1. Detecta modal erro centro custo
+2. ❌ PULA O ENTER (modal continua aberto!)
+3. Tenta pressionar F6 (mas modal bloqueia)
+4. Atualiza Sheets (funciona porque é API)
+5. Continue (mas tela fica travada)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ CORREÇÃO APLICADA
+
+Adicionado ENTER antes do F6 na detecção de erro centro custo:
+
+✅ FLUXO CORRETO (agora):
+1. Detecta modal erro centro custo
+2. ✅ Pressiona ENTER (fecha modal)
+3. Aguarda 1 segundo
+4. Pressiona F6 (limpa formulário)
+5. Atualiza Sheets
+6. Continue (pula para próximo item)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📝 CÓDIGO ADICIONADO
+
+Arquivo: main_ciclo.py
+Linha: ~3398 (antes do F6)
+
+ADICIONADO:
+┌─────────────────────────────────────────────────────────────────────┐
+│ # 1️⃣ FECHAR MODAL COM ENTER                                        │
+│ gui_log("[ERRO CC POS] >> Pressionando ENTER para fechar modal...")│
+│                                                                     │
+│ if not MODO_TESTE:                                                 │
+│     time.sleep(0.5)                                                │
+│     pyautogui.press("enter")                                       │
+│     gui_log("[ERRO CC POS] << ENTER pressionado")                 │
+│     time.sleep(1)                                                  │
+│     gui_log("[ERRO CC POS] ✅ Modal fechado!")                     │
+│                                                                     │
+│ # 2️⃣ LIMPAR FORMULÁRIO COM F6                                      │
+│ gui_log("[ERRO CC POS] 🧹 Pressionando F6 para limpar...")         │
+│ ...                                                                │
+└─────────────────────────────────────────────────────────────────────┘
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ VERIFICAÇÃO - QUANTIDADE NEGATIVA
+
+A parte de quantidade negativa JÁ ESTAVA CORRETA:
+
+✅ FLUXO (linha ~2997):
+1. Detecta modal quantidade negativa
+2. ✅ Pressiona ENTER (linha 2999) - JÁ TINHA!
+3. Aguarda
+4. Pressiona F6
+5. Atualiza Sheets
+6. Continue
+
+CONCLUSÃO: Só faltava ENTER na parte de erro centro custo.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 LOGS ESPERADOS AGORA
+
+Quando detectar erro centro custo:
+──────────────────────────────────────────────────────────────────────
+[MODAL DIFF] Pixels vermelho ANTES: 85
+[MODAL DIFF] Pixels vermelho DEPOIS: 920
+[MODAL DIFF] Aumento: 835 pixels
+⚠️ [MODAL DIFF] ✅ Modal detectado! (aumento de 835 pixels)
+❌ [ERRO CC POS] Erro Centro de Custo detectado APÓS Ctrl+S!
+[ERRO CC POS] ═══════════════════════════════════════════════
+[ERRO CC POS] >> Pressionando ENTER para fechar modal...     ← NOVO!
+[ERRO CC POS] << ENTER pressionado                           ← NOVO!
+[ERRO CC POS] ✅ Modal fechado!                               ← NOVO!
+[ERRO CC POS] ═══════════════════════════════════════════════
+[ERRO CC POS] 🧹 Pressionando F6 para limpar formulário...
+[ERRO CC POS] >> Tentativa 1/3: Pressionando F6...
+[ERRO CC POS] << F6 pressionado
+[ERRO CC POS] ✅ Formulário limpo com F6
+✅ [ERRO CC POS] Status atualizado: 'Erro Centro de Custo'
+[ERRO CC POS] ➡️ Continuando para próximo item...
+──────────────────────────────────────────────────────────────────────
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🚀 PRÓXIMOS PASSOS
+
+1. BUILD:
+   cd C:\Users\ID135\OneDrive\Desktop\www\rpas\rpa_ciclo\essential
+   BUILD_GENESYS.bat
+
+2. TESTAR:
+   - Item com erro centro custo
+   - Verificar nos logs: ">> Pressionando ENTER para fechar modal..."
+   - Confirmar que modal fecha
+   - Confirmar que F6 funciona
+   - Confirmar que pula para próximo item
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎯 RESUMO
+
+BUG: Faltava ENTER antes do F6 na detecção de erro centro custo
+FIX: Adicionado pyautogui.press("enter") antes do F6
+LOCAL: main_ciclo.py, linha ~3406
+
+FLUXO CORRETO AGORA:
+  ENTER → (fecha modal) → F6 → (limpa formulário) → Sheets → Continue
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+                            ✅ CORREÇÃO APLICADA!

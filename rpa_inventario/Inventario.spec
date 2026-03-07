@@ -24,16 +24,18 @@ added_files = [
 if os.path.exists('Logo.ico'):
     added_files.append(('Logo.ico', '.'))
 
-# Coletar TODAS as imagens da pasta elementos/
+# Coletar TODAS as imagens da pasta elementos/ para _internal
 elementos_dir = Path('elementos')
 if elementos_dir.exists():
     print(f"[OK] Coletando imagens da pasta elementos/...")
     elementos_count = 0
     for img in elementos_dir.glob('*.png'):
+        # Formato: (source, destination_folder_inside_MEIPASS)
+        # Isso cria _internal/elementos/ automaticamente
         added_files.append((str(img), 'elementos'))
         elementos_count += 1
         print(f"     - {img.name}")
-    print(f"[OK] {elementos_count} imagens adicionadas da pasta elementos/")
+    print(f"[OK] {elementos_count} imagens adicionadas para _internal/elementos/")
 else:
     print(f"[WARN] Pasta elementos/ não encontrada!")
 
@@ -43,10 +45,11 @@ if elementos_teste_dir.exists():
     print(f"[OK] Coletando imagens da pasta elementos/teste/ (MODO TESTE)...")
     teste_count = 0
     for img in elementos_teste_dir.glob('*.png'):
+        # Isso cria _internal/elementos/teste/
         added_files.append((str(img), 'elementos/teste'))
         teste_count += 1
         print(f"     - {img.name}")
-    print(f"[OK] {teste_count} imagens adicionadas da pasta elementos/teste/")
+    print(f"[OK] {teste_count} imagens adicionadas para _internal/elementos/teste/")
 else:
     print(f"[WARN] Pasta elementos/teste/ não encontrada! (Modo Teste não disponível)")
 

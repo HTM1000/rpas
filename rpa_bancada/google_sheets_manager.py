@@ -9,22 +9,20 @@ from googleapiclient.discovery import build
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 # Configurações da planilha
-SPREADSHEET_ID = '1KMS-1_FY6-cU26ZlaFu5jciSHEWlmluHo-QOFbB1LFE'  # PLANILHA MODO TESTE BANCADA
+SPREADSHEET_ID = '1UgJWxmnYzv-FVTT4rrrVEx3J_MNXZsctwrPSTyyylPQ'  # BANCADA (Produção) - COMENTADO PARA TESTE
+# SPREADSHEET_ID = '1KMS-1_FY6-cU26ZlaFu5jciSHEWlmluHo-QOFbB1LFE'  # BANCADA (TESTE) - USAR ESTE PARA TESTES
 SHEET_NAME = None  # Será detectado automaticamente
-RANGE_NAME = 'A:J'  # Colunas A até J (Codigo, Data + 8 colunas principais)
+RANGE_NAME = 'A:I'  # Colunas A até I (Codigo, Data + 7 colunas principais - SEM REV)
 
-# Arquivos de credenciais (compatível com .exe)
-BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-OAUTH_CREDENTIALS_FILE = os.path.join(BASE_DIR, 'CredenciaisOracle.json')
+# Diretório base compatível com .exe (arquivos embutidos)
+base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 
-# Token em local persistente (mesmo diretório do executável)
-if getattr(sys, 'frozen', False):
-    # Se está rodando como .exe, salva no diretório do executável
-    EXE_DIR = os.path.dirname(sys.executable)
-    TOKEN_FILE = os.path.join(EXE_DIR, 'token.json')
-else:
-    # Se está rodando como script Python, salva no diretório do script
-    TOKEN_FILE = os.path.join(BASE_DIR, 'token.json')
+# Diretório para arquivos de dados (onde o .exe está) - IGUAL RPA ORACLE
+data_path = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+
+# Arquivos de credenciais e token - IGUAL RPA ORACLE
+OAUTH_CREDENTIALS_FILE = os.path.join(base_path, 'CredenciaisOracle.json')
+TOKEN_FILE = os.path.join(data_path, 'token.json')
 
 # ==========================
 # Autenticação
@@ -41,47 +39,28 @@ def get_sheets_service():
     raise FileNotFoundError(f"Arquivo de credenciais não encontrado: {OAUTH_CREDENTIALS_FILE}")
 
 def get_sheets_service_oauth2():
+    """Autenticação OAuth2 - IGUAL RPA ORACLE"""
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
 
     creds = None
-    try:
-        if os.path.exists(TOKEN_FILE):
-            print("[Refresh] Carregando token.json existente...")
-            creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
-            print(f"  - Credenciais carregadas: expired={creds.expired}, valid={creds.valid}, refresh_token={creds.refresh_token is not None}")
-    except Exception as e:
-        print(f"[WARN] Erro ao carregar token.json: {repr(e)}")
-        creds = None
+    if os.path.exists(TOKEN_FILE):
+        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            try:
-                print("[Refresh] Renovando credenciais expiradas...")
-                creds.refresh(Request())
-                print("[OK] Renovação bem-sucedida!")
-            except Exception as e:
-                print(f"[ERROR] Falha ao renovar credenciais: {repr(e)}")
-                creds = None
-        if not creds:
-            print("[OAuth] Iniciando fluxo OAuth via navegador...")
+            creds.refresh(Request())
+        else:
+            print("🔐 Abrindo navegador para autenticação Google Sheets...")
             flow = InstalledAppFlow.from_client_secrets_file(OAUTH_CREDENTIALS_FILE, SCOPES)
             creds = flow.run_local_server(port=0)
-            print("[OK] Autenticação concluída!")
+            print("✅ Autenticação concluída!")
 
-        try:
-            with open(TOKEN_FILE, 'w') as token:
-                token.write(creds.to_json())
-            print("[Save] Token salvo como token.json!")
-        except Exception as e:
-            print(f"[WARN] Falha ao salvar token.json: {repr(e)}")
+        with open(TOKEN_FILE, 'w') as token:
+            token.write(creds.to_json())
 
-    try:
-        return build('sheets', 'v4', credentials=creds)
-    except Exception as e:
-        print(f"[ERROR] Erro ao construir o serviço Sheets: {repr(e)}")
-        raise
+    return build('sheets', 'v4', credentials=creds)
 
 # ==========================
 # Helpers Sheets
@@ -103,7 +82,7 @@ def filtrar_colunas_principais(df: pd.DataFrame) -> pd.DataFrame:
     """
     Filtra e normaliza as colunas principais do DataFrame.
     Adiciona Codigo (sequencial) e Data (timestamp) no início.
-    Colunas finais: Codigo, Data, ORG., SUB., ENDEREÇO, ITEM, DESCRIÇÃO ITEM, REV., UDM PRINCIPAL, EM ESTOQUE
+    Colunas finais: Codigo, Data, ORG., SUB., ENDEREÇO, ITEM, DESCRIÇÃO ITEM, UDM PRINCIPAL, EM ESTOQUE (SEM REV)
     """
     # Mapeamento de possíveis variações nos nomes das colunas
     column_mapping = {
@@ -112,7 +91,6 @@ def filtrar_colunas_principais(df: pd.DataFrame) -> pd.DataFrame:
         'endereço': 'ENDEREÇO',
         'item': 'ITEM',
         'descrição item': 'DESCRIÇÃO ITEM',
-        'rev.': 'REV.',
         'udm principal': 'UDM PRINCIPAL',
         'em estoque': 'EM ESTOQUE',
         'org': 'ORG.',
@@ -128,10 +106,6 @@ def filtrar_colunas_principais(df: pd.DataFrame) -> pd.DataFrame:
         'descricao item': 'DESCRIÇÃO ITEM',
         'descricao do item': 'DESCRIÇÃO ITEM',
         'description': 'DESCRIÇÃO ITEM',
-        'rev': 'REV.',
-        'revision': 'REV.',
-        'revisao': 'REV.',
-        'revisão': 'REV.',
         'udm': 'UDM PRINCIPAL',
         'unit': 'UDM PRINCIPAL',
         'uom': 'UDM PRINCIPAL',
@@ -154,8 +128,8 @@ def filtrar_colunas_principais(df: pd.DataFrame) -> pd.DataFrame:
     if new_columns:
         df_clean = df_clean.rename(columns=new_columns)
 
-    # Definir as 8 colunas principais na ordem correta
-    required_columns = ['ORG.', 'SUB.', 'ENDEREÇO', 'ITEM', 'DESCRIÇÃO ITEM', 'REV.', 'UDM PRINCIPAL', 'EM ESTOQUE']
+    # Definir as 7 colunas principais na ordem correta (SEM REV)
+    required_columns = ['ORG.', 'SUB.', 'ENDEREÇO', 'ITEM', 'DESCRIÇÃO ITEM', 'UDM PRINCIPAL', 'EM ESTOQUE']
 
     # Adicionar colunas faltantes com valores vazios
     for col in required_columns:
@@ -179,45 +153,56 @@ def filtrar_colunas_principais(df: pd.DataFrame) -> pd.DataFrame:
 def enviar_para_google_sheets(df: pd.DataFrame) -> bool:
     """
     Envia DataFrame para Google Sheets.
+    Assume que o DataFrame JÁ VEM com as colunas corretas mapeadas pelo main.py
+    Adiciona apenas Codigo (sequencial) e Data (horário Brasília UTC-3) no início.
     Retorna True se bem-sucedido, False caso contrário.
     """
     try:
-        print(f"DataFrame recebido: {df.shape[0]} linhas, colunas: {list(df.columns)}")
+        print(f"[Sheets] Recebido: {df.shape[0]} linhas x {df.shape[1]} colunas")
 
-        # Filtrar apenas as 8 colunas principais + adicionar Codigo e Data
-        df_filtered = filtrar_colunas_principais(df)
-
-        print(f"DataFrame filtrado: {df_filtered.shape[0]} linhas, colunas: {list(df_filtered.columns)}")
-
-        if df_filtered.empty:
-            print("Não foi possível filtrar as colunas principais")
+        if df.empty:
+            print("[Sheets] ❌ DataFrame vazio")
             return False
 
-        print(f"Enviando {len(df_filtered)} linhas para Google Sheets...")
+        # Criar cópia para não modificar o original
+        df_envio = df.copy()
+
+        # Adicionar coluna Codigo (sequencial) no início
+        df_envio.insert(0, 'Codigo', range(1, len(df_envio) + 1))
+
+        # Adicionar coluna Data (timestamp atual) logo após Codigo
+        from datetime import datetime
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        df_envio.insert(1, 'Data', timestamp)
+
+        print(f"[Sheets] Preparado: {df_envio.shape[0]} linhas x {df_envio.shape[1]} colunas")
+        print(f"[Sheets] Timestamp: {timestamp}")
 
         # Obter serviço do Google Sheets
         service = get_sheets_service()
+        print("[Sheets] ✅ Serviço obtido")
 
         # Detectar nome da primeira aba
         sheet_name = get_first_sheet_name(service)
-        range_name = f'{sheet_name}!A:J'
-        print(f"Usando aba: {sheet_name}")
+        print(f"[Sheets] Usando aba: {sheet_name}")
 
         # Preparar dados para envio (incluir cabeçalho)
-        values = [df_filtered.columns.tolist()] + df_filtered.values.tolist()
+        values = [df_envio.columns.tolist()] + df_envio.values.tolist()
 
-        # Limpar dados existentes e inserir novos dados
-        body = {
-            'values': values
-        }
+        # Calcular range dinâmico baseado no número de colunas
+        # A até a última coluna (ex: se 10 colunas, A:J)
+        ultima_coluna = chr(64 + len(df_envio.columns))  # A=65, então 64+1=A
+        range_name = f'{sheet_name}!A:{ultima_coluna}'
+        print(f"[Sheets] Range: {range_name} ({len(values):,} linhas x {len(df_envio.columns)} colunas)")
 
-        # Primeiro, limpar a planilha
+        # Limpar planilha e enviar dados
+        body = {'values': values}
+
         service.spreadsheets().values().clear(
             spreadsheetId=SPREADSHEET_ID,
             range=range_name
         ).execute()
 
-        # Inserir novos dados
         result = service.spreadsheets().values().update(
             spreadsheetId=SPREADSHEET_ID,
             range=range_name,
@@ -226,15 +211,17 @@ def enviar_para_google_sheets(df: pd.DataFrame) -> bool:
         ).execute()
 
         rows_updated = result.get('updatedRows', 0)
-        print(f"[OK] Google Sheets atualizado: {rows_updated} linhas")
+        print(f"[Sheets] ✅ Enviado: {rows_updated:,} linhas")
         return True
 
     except FileNotFoundError as e:
-        print(f"Erro de credenciais Google Sheets: {e}")
-        print("(Os dados foram salvos no Excel local)")
+        print(f"[Sheets] ❌ Arquivo não encontrado: {OAUTH_CREDENTIALS_FILE}")
+        print(f"[Sheets] (Dados salvos no Excel local)")
         return False
     except Exception as e:
-        print(f"Erro ao enviar para Google Sheets: {e}")
+        print(f"[Sheets] ❌ Erro ao enviar: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def testar_conexao() -> bool:
@@ -263,10 +250,8 @@ if __name__ == "__main__":
             'ENDEREÇO': ['END001', 'END002'],
             'ITEM': ['ITEM001', 'ITEM002'],
             'DESCRIÇÃO ITEM': ['Desc 1', 'Desc 2'],
-            'REV.': ['R1', 'R2'],
             'UDM PRINCIPAL': ['PC', 'UN'],
-            'EM ESTOQUE': [100, 250],
-            'COLUNA_EXTRA': ['ignorar', 'ignorar']
+            'EM ESTOQUE': [100, 250]
         })
 
         if enviar_para_google_sheets(df_teste):

@@ -1,29 +1,34 @@
-# RPA Ciclo - Dependências Python
-# Para instalar todas: pip install -r requirements.txt
+# Dependências do RPA Ciclo - Tecumseh Genesys
+# Sistema completo de automação Oracle + Evidências
 
-# Automação de GUI
-pyautogui>=0.9.54
+# === Automação e GUI ===
+pyautogui>=0.9.53
 pyperclip>=1.8.2
 keyboard>=0.13.5
-
-# Google Sheets
-google-auth>=2.23.0
-google-auth-oauthlib>=1.1.0
-google-auth-httplib2>=0.1.1
-google-api-python-client>=2.100.0
-
-# OCR e Processamento de Imagem
-pytesseract>=0.3.10
 Pillow>=10.0.0
-opencv-python>=4.8.0
-numpy>=1.24.0
 
-# Processamento de Dados
+# === Google APIs ===
+google-auth>=2.17.3
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.1.0
+google-api-python-client>=2.80.0
+
+# === Data Processing ===
 pandas>=2.0.0
 openpyxl>=3.1.0
 
-# Notificações Telegram
+# === OCR (Validação Visual) ===
+pytesseract>=0.3.10
+opencv-python>=4.8.0.74
+
+# === HTTP e Requests ===
 requests>=2.31.0
 
-# Build
-pyinstaller>=6.0.0
+# === Sistema e Monitoramento ===
+psutil>=5.9.5
+
+# === Notificações ===
+# Telegram bot (se necessário, instalar separadamente)
+
+# === Build (PyInstaller) ===
+# pyinstaller>=5.13.0  # Instalar separadamente quando for fazer build

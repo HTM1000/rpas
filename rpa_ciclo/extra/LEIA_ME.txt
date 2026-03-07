@@ -1,0 +1,92 @@
+================================================================================
+                    PASTA EXTRA - ARQUIVOS NÃO ESSENCIAIS
+================================================================================
+
+Esta pasta contém arquivos que NÃO são necessários para executar o RPA Ciclo,
+mas que podem ser úteis para desenvolvimento, testes e documentação.
+
+ARQUIVOS DE TESTE (Modo TESTE):
+--------------------------------
+- BUILD_GENESYS_TESTE.bat       -> Build em modo de teste
+- config_TESTE.json             -> Configurações para modo teste
+- Genesys_TESTE.spec            -> Spec PyInstaller para teste
+- google_sheets_ciclo_TESTE.py  -> Google Sheets para ambiente de teste
+- IS_TEST_MODE.flag             -> Flag indicadora de modo teste
+
+SCRIPTS DE DEBUG E TESTE:
+--------------------------
+- debug_tela_simples.py         -> Debug simplificado de tela
+- debug_validacao_tela.py       -> Debug de validação de tela
+- teste_correcao_ocr.py         -> Testa correções de OCR
+- teste_telegram.py             -> Testa notificações Telegram
+- teste_telegram_debug.py       -> Debug do Telegram
+- teste_telegram_simples.py     -> Teste simples do Telegram
+- testar_config_telegram.py     -> Testa config do Telegram
+- testar_deteccao_tela.py       -> Testa detecção de telas
+
+FERRAMENTAS AUXILIARES:
+-----------------------
+- capturar_tela_referencia.py   -> Captura screenshots de referência
+- mouse_position_helper.py      -> Captura coordenadas do mouse
+- validador_hibrido.py          -> Sistema antigo de validação
+
+SCRIPTS BATCH:
+--------------
+- LIMPAR_ARQUIVOS_ANTIGOS.bat   -> Limpa arquivos temporários antigos
+
+DOCUMENTAÇÃO ADICIONAL:
+-----------------------
+- CLIQUE_LIMPAR_DETALHADO.md            -> Doc sobre clique limpar
+- COORDENADAS_EXATAS.md                 -> Doc de coordenadas
+- CORRECOES_DEBUG_TELEGRAM.md           -> Correções do Telegram
+- MUDANCAS_IMPLEMENTADAS.md             -> Histórico de mudanças
+- README_CICLO_COMPLETO.md              -> README do ciclo completo
+- README_CONFIGURACAO_PLANILHAS.md      -> Config das planilhas
+- README_RESUMO_EXECUTIVO.md            -> Resumo executivo
+- README_TELEGRAM.md                    -> Doc do Telegram
+- README_TESTE_vs_PROD.md               -> Diferenças teste vs prod
+- RESUMO_RPA_CICLO.md                   -> Resumo do RPA
+- ULTIMAS_MUDANCAS_VALIDACAO.md         -> Mudanças na validação
+- VALIDACAO_HIBRIDA_README.md           -> Doc validação híbrida
+- VALIDACAO_SALVAMENTO.md               -> Doc de validação de salvamento
+
+SCREENSHOTS E IMAGENS:
+----------------------
+- tela_transferencia_subinventory_REDIMENSIONADA_20251027_131226.png
+  -> Screenshot de debug da tela de transferência
+
+PASTAS ANTIGAS (PyInstaller):
+------------------------------
+- build_pyinstaller_old/        -> Pasta build antiga do PyInstaller
+- dist_old/                     -> Pasta dist antiga do PyInstaller
+
+================================================================================
+QUANDO USAR ESTES ARQUIVOS:
+================================================================================
+
+1. DESENVOLVIMENTO:
+   - Use mouse_position_helper.py para capturar novas coordenadas
+   - Use capturar_tela_referencia.py para screenshots de referência
+   - Consulte a documentação extra para entender implementações antigas
+
+2. TESTES:
+   - Use os arquivos *_TESTE.* para testar sem afetar produção
+   - Execute scripts teste_*.py para validar funcionalidades específicas
+   - Use debug_*.py para investigar problemas
+
+3. DOCUMENTAÇÃO:
+   - Consulte os README_*.md para contexto histórico
+   - Use como referência para entender decisões de design
+
+================================================================================
+IMPORTANTE:
+================================================================================
+
+Estes arquivos NÃO são necessários para:
+- Executar o RPA em produção
+- Gerar o executável final
+- Distribuir para usuários finais
+
+Mantenha esta pasta apenas no ambiente de desenvolvimento!
+
+================================================================================

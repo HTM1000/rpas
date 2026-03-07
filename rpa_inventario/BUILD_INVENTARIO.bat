@@ -86,24 +86,77 @@ if not exist "elementos" (
     exit /b 1
 )
 
-REM Contar imagens PNG na pasta elementos
-set /a count=0
-for %%f in (elementos\*.png) do set /a count+=1
+REM ===== VALIDAR IMAGENS OBRIGATORIAS =====
+echo.
+echo Validando imagens obrigatorias...
+echo.
 
-if %count% LSS 5 (
-    echo [AVISO] Apenas %count% imagens encontradas na pasta elementos
-    echo         Esperado pelo menos 5 imagens:
-    echo         - input_nome.png
-    echo         - botao_localizar.png
-    echo         - botao_nao.png
-    echo         - input_etiqueta.png
-    echo         - botao_salvar.png
-    echo.
-    choice /C SN /N /M "Continuar mesmo assim? (S/N): "
-    if errorlevel 2 exit /b 1
-) else (
-    echo [OK] %count% imagens encontradas na pasta elementos
+set MISSING=0
+
+REM Imagens de interface (UI)
+if not exist "elementos\input_nome.png" (
+    echo [FALTA] elementos\input_nome.png
+    set MISSING=1
 )
+if not exist "elementos\botao_localizar.png" (
+    echo [FALTA] elementos\botao_localizar.png
+    set MISSING=1
+)
+if not exist "elementos\botao_nao.png" (
+    echo [FALTA] elementos\botao_nao.png
+    set MISSING=1
+)
+if not exist "elementos\input_etiqueta.png" (
+    echo [FALTA] elementos\input_etiqueta.png
+    set MISSING=1
+)
+if not exist "elementos\botao_salvar.png" (
+    echo [FALTA] elementos\botao_salvar.png
+    set MISSING=1
+)
+if not exist "elementos\botao_limpar.png" (
+    echo [FALTA] elementos\botao_limpar.png
+    set MISSING=1
+)
+
+REM Imagens de erro (validacao)
+if not exist "elementos\erro_item_inexistente.png" (
+    echo [FALTA] elementos\erro_item_inexistente.png
+    set MISSING=1
+)
+if not exist "elementos\erro_endereco_inexistente.png" (
+    echo [FALTA] elementos\erro_endereco_inexistente.png
+    set MISSING=1
+)
+if not exist "elementos\erro_subinventario_inexistente.png" (
+    echo [FALTA] elementos\erro_subinventario_inexistente.png
+    set MISSING=1
+)
+if not exist "elementos\erro_udm_inexistente.png" (
+    echo [FALTA] elementos\erro_udm_inexistente.png
+    set MISSING=1
+)
+if not exist "elementos\login_expirado.png" (
+    echo [FALTA] elementos\login_expirado.png
+    set MISSING=1
+)
+
+if %MISSING%==1 (
+    echo.
+    echo [ERRO] Imagens obrigatorias faltando!
+    echo        Adicione as imagens na pasta elementos\ e tente novamente
+    echo.
+    choice /C SN /N /M "Continuar mesmo assim? (S para SIM, N para CANCELAR): "
+    if errorlevel 2 exit /b 1
+    echo [AVISO] Continuando sem todas as imagens...
+) else (
+    echo [OK] Todas as imagens obrigatorias presentes
+)
+
+REM Listar todas as imagens encontradas
+echo.
+echo Imagens que serao incluidas no build:
+dir /b elementos\*.png 2>nul
 echo.
 
 REM ===== MATAR PROCESSO SE ESTIVER RODANDO =====
@@ -167,6 +220,62 @@ if not exist "dist\RPA_Inventario\RPA_Inventario.exe" (
 echo [OK] Executavel criado com sucesso
 echo.
 
+REM ===== VERIFICAR SE PASTA ELEMENTOS FOI COPIADA =====
+echo Verificando se pasta elementos foi incluida no build (_internal)...
+if not exist "dist\RPA_Inventario\_internal\elementos" (
+    echo [ERRO] Pasta elementos nao foi copiada para _internal!
+    echo        Verifique o arquivo Inventario.spec
+    pause
+    exit /b 1
+)
+
+REM Contar imagens no build
+set /a build_count=0
+for %%f in (dist\RPA_Inventario\_internal\elementos\*.png) do set /a build_count+=1
+
+if %build_count% LSS 5 (
+    echo [AVISO] Apenas %build_count% imagens encontradas no build
+    echo         Pode haver problema na copia das imagens
+    pause
+) else (
+    echo [OK] %build_count% imagens copiadas para _internal\elementos\
+)
+
+REM Verificar imagens de erro especificas
+echo.
+echo Verificando imagens de validacao de erro...
+set ERRO_MISSING=0
+
+if not exist "dist\RPA_Inventario\_internal\elementos\erro_item_inexistente.png" (
+    echo [FALTA] erro_item_inexistente.png
+    set ERRO_MISSING=1
+)
+if not exist "dist\RPA_Inventario\_internal\elementos\erro_endereco_inexistente.png" (
+    echo [FALTA] erro_endereco_inexistente.png
+    set ERRO_MISSING=1
+)
+if not exist "dist\RPA_Inventario\_internal\elementos\erro_subinventario_inexistente.png" (
+    echo [FALTA] erro_subinventario_inexistente.png
+    set ERRO_MISSING=1
+)
+if not exist "dist\RPA_Inventario\_internal\elementos\erro_udm_inexistente.png" (
+    echo [FALTA] erro_udm_inexistente.png
+    set ERRO_MISSING=1
+)
+if not exist "dist\RPA_Inventario\_internal\elementos\login_expirado.png" (
+    echo [FALTA] login_expirado.png
+    set ERRO_MISSING=1
+)
+
+if %ERRO_MISSING%==1 (
+    echo [AVISO] Algumas imagens de validacao estao faltando!
+    echo         O RPA pode nao detectar erros corretamente
+    pause
+) else (
+    echo [OK] Todas as imagens de validacao presentes
+)
+echo.
+
 REM ===== COPIAR PARA DESKTOP (OPCIONAL) =====
 echo Deseja copiar para o Desktop? (S/N)
 choice /C SN /N /M "Pressione S para SIM ou N para NAO: "
@@ -201,10 +310,17 @@ echo             nao apenas o .exe
 echo.
 echo Arquivos incluidos:
 echo   - RPA_Inventario.exe (executavel principal)
-echo   - _internal\ (dependencias PyAutoGUI, OpenCV, etc)
-echo   - elementos\ (imagens para deteccao de elementos)
-echo   - config.json (configuracoes)
-echo   - CredenciaisOracle.json (credenciais Google)
-echo   - Logo.png, Tecumseh.png, Topo.png
+echo   - _internal\ (dependencias PyAutoGUI, OpenCV, config, etc)
+echo   - _internal\elementos\ (%build_count% imagens incluindo validacao)
+echo.
+echo Imagens de validacao de erro em _internal\elementos\:
+echo   - erro_item_inexistente.png
+echo   - erro_endereco_inexistente.png
+echo   - erro_subinventario_inexistente.png
+echo   - erro_udm_inexistente.png
+echo   - login_expirado.png
+echo.
+echo NOTA: As imagens estao dentro de _internal\elementos\
+echo       O executavel le automaticamente deste local
 echo.
 pause

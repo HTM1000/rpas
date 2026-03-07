@@ -1,0 +1,67 @@
+================================================================================
+                    PASTA ESSENTIAL - RPA CICLO (GENESYS)
+================================================================================
+
+Esta pasta contém APENAS os arquivos ESSENCIAIS para executar o RPA Ciclo.
+
+ARQUIVOS PRINCIPAIS:
+--------------------
+- RPA_Ciclo_GUI_v2.py       -> Interface gráfica principal
+- main_ciclo.py             -> Lógica do ciclo completo (6 etapas)
+- google_sheets_ciclo.py    -> Integração com Google Sheets (logs)
+- google_sheets_manager.py  -> Integração com Google Sheets (bancada)
+- telegram_notifier.py      -> Notificações via Telegram
+
+CONFIGURAÇÃO:
+-------------
+- config.json               -> Coordenadas da tela e tempos
+- CredenciaisOracle.json    -> Credenciais da API Google Sheets
+- token.json                -> Token OAuth (gerado automaticamente)
+
+BUILD:
+------
+- BUILD_GENESYS.bat         -> Script principal de build
+- LIMPAR_E_BUILD.bat        -> Limpa e reconstrói
+- Genesys.spec              -> Configuração do PyInstaller
+- requirements.txt          -> Dependências Python
+
+RECURSOS:
+---------
+- Logo.ico, Logo.png        -> Ícones da aplicação
+- Tecumseh.png, Topo.png    -> Imagens da interface
+- informacoes/              -> Imagens de detecção de erros
+  - ErroProduto.png         -> Erro de produto inválido (PARA o RPA)
+  - qtd_negativa.png        -> Erro de quantidade negativa (CONTINUA)
+  - queda_rede.png          -> Detecção de queda de rede
+  - tempo_oracle.png        -> Detecção de timeout Oracle
+  - wallatas.png            -> Imagem de validação
+  - tela-*.jpg              -> Referências visuais das telas
+
+DOCUMENTAÇÃO:
+-------------
+- README_PRINCIPAL.md       -> Documentação completa do projeto
+
+================================================================================
+COMO USAR:
+================================================================================
+
+1. EXECUTAR EM MODO DESENVOLVIMENTO:
+   python RPA_Ciclo_GUI_v2.py
+
+2. GERAR EXECUTÁVEL:
+   BUILD_GENESYS.bat
+
+3. O executável será gerado em: dist/Genesys/
+   IMPORTANTE: Distribuir a pasta COMPLETA, não apenas o .exe
+
+================================================================================
+OBSERVAÇÕES IMPORTANTES:
+================================================================================
+
+- Todas as coordenadas em config.json são dependentes da resolução
+- O OCR depende do Tesseract (incluído no executável)
+- As credenciais Google precisam estar no mesmo diretório do executável
+- O token.json é gerado na primeira execução
+- FAILSAFE: Mova o mouse para (0,0) para parar emergencialmente
+
+================================================================================

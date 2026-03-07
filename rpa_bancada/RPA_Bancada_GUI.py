@@ -61,7 +61,7 @@ def rpa_worker():
         log_interface("⚠️ FAILSAFE ativo: mova o mouse para o canto superior esquerdo para parar")
 
         # Chama a função main do RPA original com execução única
-        main.main(single_run=True)
+        main.main(single_run=False)  # Loop infinito
 
         # Quando terminar, mostrar notificação
         log_interface("=" * 70)

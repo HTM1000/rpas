@@ -138,7 +138,7 @@ def authenticate_google():
     print("[Auth] ✅ Autenticação bem-sucedida!")
     return build("sheets", "v4", credentials=creds)
 
-def buscar_dados_inventario(nome_inventario: str, tipo_contagem: str = "primeira", tipo_planilha: str = "bc1"):
+def buscar_dados_inventario(nome_inventario: str, tipo_contagem: str = "primeira", tipo_planilha: str = "bc1", robo_id: str = ""):
     """
     Busca dados de um inventário específico na planilha do Google Sheets
     Retorna apenas colunas A:J (ID até Físico)
@@ -147,6 +147,8 @@ def buscar_dados_inventario(nome_inventario: str, tipo_contagem: str = "primeira
         nome_inventario: Nome do inventário a buscar
         tipo_contagem: "primeira" ou "segunda" contagem
         tipo_planilha: "bc1" ou "bc2"
+        robo_id: ID do robô executando (ex: "PC-01"). Se fornecido, permite reprocessar
+                 itens que estavam sendo processados por este mesmo robô
 
     Returns:
         Lista de dicionários com os dados do inventário
@@ -251,14 +253,27 @@ def buscar_dados_inventario(nome_inventario: str, tipo_contagem: str = "primeira
                 elif 'LOGIN ORACLE EXPIRADO' in status_str or 'LOGIN EXPIRADO' in status_str:
                     print(f"   [✅ REPROCESSAR] Item ID {item.get('ID')} (linha {row_index}) - Status: '{status_rpa}'")
                     # NÃO pular - deixar processar
-                elif 'ERRO' in status_str and 'REPROCESSAR' in status_str:
-                    print(f"   [✅ REPROCESSAR] Item ID {item.get('ID')} (linha {row_index}) - Status: '{status_rpa}'")
+                elif status_str.startswith('ERRO:') or status_rpa.strip().startswith('Erro:'):
+                    # QUALQUER status que comece com "Erro:" deve ser reprocessado
+                    # Exemplos: "Erro: Item Inexistente", "Erro: Subinventario Inexistente", etc
+                    print(f"   [✅ REPROCESSAR] Item ID {item.get('ID')} (linha {row_index}) - Status de erro: '{status_rpa}'")
+                    # NÃO pular - deixar processar
+                elif 'DIVERGÊNCIA' in status_str or 'DIVERGENCIA' in status_str:
+                    # Divergências devem ser reprocessadas após correção
+                    print(f"   [✅ REPROCESSAR] Item ID {item.get('ID')} (linha {row_index}) - Divergência: '{status_rpa}'")
                     # NÃO pular - deixar processar
 
                 # PULAR: Status que indicam que NÃO deve processar
                 elif 'PROCESSANDO' in status_str:
-                    print(f"   [SKIP] Item ID {item.get('ID')} (linha {row_index}) - Em processamento: '{status_rpa}'")
-                    continue
+                    # VERIFICAR SE É O MESMO ROBÔ
+                    # Se o status tem [robo_id] e é o mesmo robô, REPROCESSAR
+                    if robo_id and f"[{robo_id}]" in status_rpa:
+                        print(f"   [✅ REPROCESSAR] Item ID {item.get('ID')} (linha {row_index}) - Mesmo robô ({robo_id}): '{status_rpa}'")
+                        # NÃO pular - deixar processar
+                    else:
+                        # Outro robô está processando ou robo_id não especificado
+                        print(f"   [SKIP] Item ID {item.get('ID')} (linha {row_index}) - Em processamento por outro robô: '{status_rpa}'")
+                        continue
                 elif 'CONCLUIDO' in status_str or 'CONCLUÍDO' in status_str:
                     print(f"   [SKIP] Item ID {item.get('ID')} (linha {row_index}) - Já processado: '{status_rpa}'")
                     continue

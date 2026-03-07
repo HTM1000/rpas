@@ -165,7 +165,10 @@ def esperar(segundos: float, msg: str = ""):
 
 def digitar(texto: str, descricao: str = ""):
     """
-    Digita um texto
+    Digita um texto usando clipboard (Ctrl+V)
+
+    IMPORTANTE: Usa clipboard ao invés de pyautogui.write() para suportar
+    caracteres especiais e acentuação (ç, ã, õ, á, etc)
 
     Args:
         texto: Texto a digitar
@@ -174,7 +177,17 @@ def digitar(texto: str, descricao: str = ""):
     desc = descricao or "texto"
     log(f"⌨️ Digitando {desc}: {texto}")
 
-    pyautogui.write(str(texto), interval=0.05)
+    # Usar clipboard para suportar acentuação e caracteres especiais
+    # pyautogui.write() NÃO funciona com acentos!
+    texto_str = str(texto)
+
+    # Copiar para clipboard
+    pyperclip.copy(texto_str)
+    time.sleep(0.1)  # Pequeno delay para garantir que clipboard foi atualizado
+
+    # Colar com Ctrl+V
+    pyautogui.hotkey('ctrl', 'v')
+    time.sleep(0.2)  # Aguardar colagem ser processada
 
 def pressionar_tab(vezes: int = 1):
     """
@@ -252,14 +265,33 @@ def delay_randomico(min_seg=0.5, max_seg=2.0):
 def gerar_status_erro(erro_imagem: str) -> str:
     """
     Converte nome da imagem de erro para status legível
+    IMPORTANTE: Cada erro deve ter seu nome específico correto
 
     Examples:
         erro_item_inexistente.png → "Erro: Item Inexistente"
+        erro_subinventario_inexistente.png → "Erro: SubInventário Inexistente"
+        erro_endereco_inexistente.png → "Erro: Endereço Inexistente"
+        erro_udm_inexistente.png → "Erro: UDM Inexistente"
         login_expirado.png → "Login Oracle Expirado"
     """
+    # Verificar login expirado primeiro
     if "login" in erro_imagem.lower():
         return "Login Oracle Expirado"
 
+    # MAPEAMENTO ESPECÍFICO para cada tipo de erro
+    # Isso garante que cada erro tenha seu nome correto e específico
+    erro_map = {
+        "erro_item_inexistente.png": "Erro: Item Inexistente",
+        "erro_subinventario_inexistente.png": "Erro: SubInventário Inexistente",
+        "erro_endereco_inexistente.png": "Erro: Endereço Inexistente",
+        "erro_udm_inexistente.png": "Erro: UDM Inexistente",
+    }
+
+    # Verificar se tem mapeamento específico
+    if erro_imagem in erro_map:
+        return erro_map[erro_imagem]
+
+    # Fallback: Gerar nome automaticamente
     # Remove .png e substitui underscores
     status = erro_imagem.replace(".png", "").replace("_", " ")
 
@@ -411,7 +443,7 @@ def main(inventario: str = "", robo_id: str = "PC-01", tipo_contagem: str = "pri
         log("🔍 Buscando dados do Google Sheets...")
         try:
             import google_sheets_inventario as gsheets
-            dados = gsheets.buscar_dados_inventario(inventario, tipo_contagem, tipo_planilha)
+            dados = gsheets.buscar_dados_inventario(inventario, tipo_contagem, tipo_planilha, robo_id=robo_id)
 
             if dados:
                 log(f"✅ {len(dados)} itens encontrados para '{inventario}' (pendentes de processamento)")
@@ -446,7 +478,7 @@ def main(inventario: str = "", robo_id: str = "PC-01", tipo_contagem: str = "pri
             log("🔍 Buscando dados do Google Sheets...")
             try:
                 import google_sheets_inventario as gsheets
-                dados = gsheets.buscar_dados_inventario(inventario, tipo_contagem, tipo_planilha)
+                dados = gsheets.buscar_dados_inventario(inventario, tipo_contagem, tipo_planilha, robo_id=robo_id)
 
                 if dados:
                     log(f"✅ {len(dados)} itens encontrados para '{inventario}' (pendentes de processamento)")
@@ -518,6 +550,11 @@ def main(inventario: str = "", robo_id: str = "PC-01", tipo_contagem: str = "pri
                         log(f"   Popup {tentativa} não encontrado (ok se já passou)")
                         break
 
+                # BC1: Espera extra após clicar "Não" para campo estabilizar
+                if tipo_planilha.lower() == "bc1":
+                    log("⏳ BC1: Aguardando 5s após Não para campo estabilizar...")
+                    esperar(5, "BC1 - estabilização após Não")
+
                 primeiro_ciclo = False  # Marcar que já passou do primeiro ciclo
 
             else:
@@ -530,7 +567,13 @@ def main(inventario: str = "", robo_id: str = "PC-01", tipo_contagem: str = "pri
 
                 if clicar_imagem("botao_limpar.png", "botão Limpar", confianca=0.7, timeout=5):
                     log("✅ Tela limpa - pronto para processar")
-                    esperar(0.5, "após limpar")
+
+                    # BC1: Espera extra após Limpar
+                    if tipo_planilha.lower() == "bc1":
+                        log("⏳ BC1: Aguardando 5s após Limpar para campo estabilizar...")
+                        esperar(5, "BC1 - estabilização após Limpar")
+                    else:
+                        esperar(0.5, "após limpar")
                 else:
                     log("⚠️ Botão Limpar não encontrado (ok se já está limpo)")
 
@@ -578,9 +621,13 @@ def main(inventario: str = "", robo_id: str = "PC-01", tipo_contagem: str = "pri
                 # ===============================================================
                 status_atual = item.get('Status RPA', '')
                 if status_atual and 'PROCESSANDO' in str(status_atual).upper():
-                    log(f"⏭️ PULANDO item - Já está sendo processado: '{status_atual}'")
-                    log(f"   Outro robô está trabalhando neste item")
-                    continue
+                    # Verificar se é o mesmo robô
+                    if f"[{_robo_id}]" in status_atual:
+                        log(f"🔄 REPROCESSANDO item - Mesmo robô ({_robo_id}): '{status_atual}'")
+                        log(f"   Item estava sendo processado por este robô - continuando...")
+                    else:
+                        log(f"⏭️ PULANDO item - Já está sendo processado por outro robô: '{status_atual}'")
+                        continue
 
                 # ===============================================================
                 # MARCAR COMO "PROCESSANDO..." (LOCK/RESERVA DO ITEM)
@@ -610,23 +657,40 @@ def main(inventario: str = "", robo_id: str = "PC-01", tipo_contagem: str = "pri
                     log(f"⚠️ ID não encontrado - não é possível reservar item")
                     continue
 
-                # 4.1: Clicar campo Etiqueta e digitar
+                # 4.1: Digitar etiqueta (campo já está focado após Não/Limpar)
                 try:
-                    log(f"[{index}/{total_itens}] Clicando campo Etiqueta...")
+                    # LÓGICA CORRETA: Priorizar "Nova Etiqueta" se existir, senão usar "Etiqueta"
+                    etiqueta_a_usar = nova_etiqueta if nova_etiqueta else etiqueta
 
-                    if not clicar_imagem("input_etiqueta.png", "campo Etiqueta", timeout=10):
-                        log(f"❌ Não foi possível localizar campo Etiqueta")
-                        continue
+                    log(f"[{index}/{total_itens}] Digitando Etiqueta (campo já focado)...")
+                    if nova_etiqueta:
+                        log(f"   → Usando NOVA ETIQUETA: {etiqueta_a_usar}")
+                    else:
+                        log(f"   → Usando etiqueta normal: {etiqueta_a_usar}")
 
-                    esperar(0.5, "após clicar etiqueta")
+                    # BC1: Já esperou 5s após Não/Limpar, então espera menor aqui
+                    # BC2: Precisa esperar mais para estabilizar
+                    if tipo_planilha.lower() == "bc1":
+                        esperar(1, "BC1 - campo já estabilizado")
+                    else:
+                        esperar(3, "aguardar campo etiqueta ficar pronto")
 
-                    # Digitar etiqueta
-                    digitar(etiqueta, "etiqueta")
+                    # Digitar etiqueta diretamente (sem clicar, campo já focado)
+                    digitar(etiqueta_a_usar, "etiqueta")
                     esperar(0.5, "após digitar etiqueta")
 
                 except Exception as e:
+                    # Erros ao preencher etiqueta
                     log(f"❌ Erro ao preencher etiqueta: {e}")
-                    continue
+                    if item_id:
+                        gsheets.atualizar_status_rpa(
+                            item_id=item_id,
+                            status=f"Erro ao preencher etiqueta: {str(e)[:50]}",
+                            tipo_contagem=tipo_contagem,
+                            tipo_planilha=tipo_planilha,
+                            robo_id=_robo_id
+                        )
+                    raise Exception(f"Erro ao preencher etiqueta: {e}")
 
                 # 4.2: NOVO FLUXO - Verificar campo Item após TAB
                 try:
@@ -685,15 +749,20 @@ def main(inventario: str = "", robo_id: str = "PC-01", tipo_contagem: str = "pri
                             log("=" * 70)
                             log("")
 
-                            # Restaurar janela para o usuário ver o erro
-                            try:
-                                import tkinter as tk
-                                # Se houver GUI rodando, restaurar janela
-                                if _gui_log_callback:
-                                    # A GUI vai mostrar a mensagem no log
-                                    pass
-                            except:
-                                pass
+                            # Salvar na planilha antes de parar
+                            if item_id:
+                                log(f"📝 Salvando divergência na planilha (ID: {item_id})...")
+                                sucesso = gsheets.atualizar_status_rpa(
+                                    item_id=item_id,
+                                    status=f"Erro: Divergência de Item (Esperado: {item_esperado}, Encontrado: {item_genesys})",
+                                    tipo_contagem=tipo_contagem,
+                                    tipo_planilha=tipo_planilha,
+                                    robo_id=_robo_id
+                                )
+                                if sucesso:
+                                    log(f"✅ Divergência salva na planilha para reprocessamento")
+                                else:
+                                    log(f"⚠️ Não foi possível salvar divergência na planilha")
 
                             # PARAR o RPA
                             raise Exception(f"DIVERGÊNCIA: Etiqueta '{etiqueta}' - Esperado item '{item_esperado}', mas Genesys tem '{item_genesys}'")
@@ -703,7 +772,7 @@ def main(inventario: str = "", robo_id: str = "PC-01", tipo_contagem: str = "pri
                         # ETIQUETA NOVA - Campo Item está vazio
                         # ============================================================
                         log(f"[{index}/{total_itens}] ⚠️ ETIQUETA NOVA (Item vazio)")
-                        log(f"[{index}/{total_itens}] Fluxo: Item → TAB → SubInv → TAB → Endereço → TAB → UDM → TAB → Qtd → Salvar")
+                        log(f"[{index}/{total_itens}] Fluxo: Item → TAB → SubInv → TAB → Endereço → TAB → UDM (pular) → TAB → Quantidade → Salvar")
 
                         # Preencher Item
                         digitar(item_valor, "Item")
@@ -750,6 +819,7 @@ def main(inventario: str = "", robo_id: str = "PC-01", tipo_contagem: str = "pri
                         log(f"⏭️ UDM (pulado)")
 
                         # TAB e aguardar validação do UDM
+                        # Este TAB move o cursor: UDM → Quantidade
                         pressionar_tab(1)
                         esperar(wait_before_check, "aguardar validação UDM")
 
@@ -758,15 +828,15 @@ def main(inventario: str = "", robo_id: str = "PC-01", tipo_contagem: str = "pri
                         if erro:
                             pausar_por_erro(erro, item_id, "after_udm", tipo_contagem, tipo_planilha)
 
-                        # TAB + Preencher Quantidade (Físico)
-                        pressionar_tab(1)
+                        # Preencher Quantidade (Físico)
+                        # IMPORTANTE: NÃO dar TAB aqui! O cursor já está no campo Quantidade (movido pelo TAB anterior)
                         digitar(fisico, "Quantidade (Físico)")
                         log(f"✅ Quantidade preenchida: {fisico}")
 
                 except Exception as e:
                     log(f"❌ Erro ao processar item: {e}")
-                    # Se for erro de divergência, re-lançar para parar completamente
-                    if "DIVERGÊNCIA" in str(e):
+                    # Se for erro de divergência ou erro detectado (item inexistente, etc), re-lançar para parar completamente
+                    if "DIVERGÊNCIA" in str(e) or "ERRO DETECTADO" in str(e):
                         raise
                     continue
 
@@ -809,7 +879,13 @@ def main(inventario: str = "", robo_id: str = "PC-01", tipo_contagem: str = "pri
                         log(f"⚠️ Não conseguiu clicar no botão Limpar")
                         log(f"ℹ️ Continuando mesmo assim...")
 
-                    esperar(0.5, "após limpar")
+                    # BC1: Espera extra após Limpar entre itens
+                    if tipo_planilha.lower() == "bc1":
+                        log(f"⏳ BC1: Aguardando 5s após Limpar para próximo item...")
+                        esperar(5, "BC1 - estabilização após Limpar entre itens")
+                    else:
+                        esperar(0.5, "após limpar")
+
                     log(f"✅ [{index}/{total_itens}] Item processado - pronto para próximo")
 
                     # 4.6: Atualizar status na planilha como CONCLUÍDO

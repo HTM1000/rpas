@@ -1,0 +1,201 @@
+{
+  "coordenadas": {
+    "tela_01_transferencia_subinventario": {
+      "x": 593,
+      "y": 224,
+      "descricao": "Duplo clique na opção Transferência de Subinventário"
+    },
+    "tela_02_campo_tipo": {
+      "x": 155,
+      "y": 215,
+      "descricao": "Clique no campo Tipo, digita 'SUB', TAB e ENTER",
+      "digitar": "SUB",
+      "acoes": [
+        "tab",
+        "enter"
+      ]
+    },
+    "tela_03_pastinha_funcionario": {
+      "x": 32,
+      "y": 115,
+      "descricao": "Clique na pastinha para selecionar funcionário"
+    },
+    "tela_04_selecionar_wallatas": {
+      "x": 577,
+      "y": 616,
+      "descricao": "Duplo clique em Wallatas Moreira",
+      "duplo_clique": true
+    },
+    "tela_05_confirmar_sim": {
+      "x": 765,
+      "y": 635,
+      "descricao": "Clique no botão Sim"
+    },
+    "tela_06_aba_transferencia_subinventario": {
+      "x": 420,
+      "y": 156,
+      "descricao": "Clique na aba 'Transferência do Subinventário'"
+    },
+    "tela_06_limpar": {
+      "x": 332,
+      "y": 66,
+      "descricao": "Clique no botão Limpar"
+    },
+    "tela_06_fechar_subinventory_transfer": {
+      "x": 1293,
+      "y": 92,
+      "descricao": "Fechar janela 'Subinventory Transfer (BC2)' - Botão X"
+    },
+    "tela_06_fechar_transferencia_subinventario_bc2": {
+      "x": 494,
+      "y": 91,
+      "descricao": "Fechar janela 'Transferencia do Subinventario (BC2)' - Botão X"
+    },
+    "tela_06_modal_decisao_sim": {
+      "x": 647,
+      "y": 477,
+      "descricao": "Clique no botão 'Sim' do modal de decisão"
+    },
+    "tela_06_modal_forms_sim": {
+      "x": 736,
+      "y": 497,
+      "descricao": "Clique no botão 'Sim' do modal Forms"
+    },
+    "navegador_janela": {
+      "x": 340,
+      "y": 40,
+      "descricao": "Clique em 'Janela' para dar foco"
+    },
+    "navegador_menu": {
+      "x": 376,
+      "y": 127,
+      "descricao": "Clique no menu de navegação"
+    },
+    "tela_07_bancada_material": {
+      "x": 598,
+      "y": 284,
+      "descricao": "Duplo clique em '4. Bancada de Material'",
+      "duplo_clique": true
+    },
+    "tela_08_fechar_bancada": {
+      "x": 746,
+      "y": 90,
+      "descricao": "Clique no X para fechar a Bancada"
+    },
+    "bancada_detalhado": {
+      "x": 273,
+      "y": 358,
+      "descricao": "Clique no botão Detalhado da Bancada"
+    },
+    "bancada_localizar": {
+      "x": 524,
+      "y": 689,
+      "descricao": "Clique no botão Localizar da Bancada"
+    },
+    "bancada_celula_org": {
+      "x": 318,
+      "y": 174,
+      "descricao": "Clique na primeira célula (Org) da grid"
+    }
+  },
+  "campos_oracle_validacao": {
+    "descricao": "Coordenadas completas dos campos para validação híbrida (x, y, largura, altura)",
+    "observacao": "Todos os campos: Y=155, Altura=22 (Y_final=177)",
+    "campo_item": [
+      67,
+      155,
+      118,
+      22
+    ],
+    "campo_quantidade": [
+      639,
+      155,
+      89,
+      22
+    ],
+    "campo_referencia": [
+      737,
+      155,
+      100,
+      22
+    ],
+    "campo_sub_o": [
+      208,
+      155,
+      101,
+      22
+    ],
+    "campo_end_o": [
+      316,
+      155,
+      101,
+      22
+    ],
+    "campo_sub_d": [
+      422,
+      155,
+      103,
+      22
+    ],
+    "campo_end_d": [
+      530,
+      155,
+      100,
+      22
+    ]
+  },
+  "textos": {
+    "funcionario_nome": "Wallatas Moreira",
+    "navegador_opcao": "1 - Navegador - TPC BR COMP BC2 INV USER",
+    "bancada_opcao": "4. Bancada de Material"
+  },
+  "tempos_espera": {
+    "entre_cliques": 1.5,
+    "apos_modal": 5.0,
+    "apos_rpa_oracle": 4.0,
+    "apos_rpa_bancada": 4.0,
+    "ciclo_completo": 1800,
+    "comentario": "ciclo_completo está em segundos (30 minutos = 1800s)"
+  },
+  "caminhos_rpa": {
+    "rpa_oracle": "../rpa_oracle/RPA_Oracle.py",
+    "rpa_bancada": "../rpa_bancada/main.py"
+  },
+  "telegram": {
+    "bot_token": "8300855810:AAEC4OTval-NLjnquKsd49aOG7b4NJZo5mU",
+    "chat_id": "-4669835847",
+    "habilitado": true
+  },
+  "planilhas": {
+    "oracle_itens": "14yUMc12iCQxqVzGTBvY6g9bIFfMhaQZ26ydJk_4ZeDk",
+    "comentario": "Planilha Oracle onde estão os itens para processar (aba Separação)"
+  },
+  "internet": {
+    "verificar_antes_item": true,
+    "timeout_ping_segundos": 3,
+    "host_teste": "google.com",
+    "circuit_breaker_falhas_threshold": 3,
+    "circuit_breaker_timeout_reabrir": 60,
+    "comentario": "Circuit breaker evita pings excessivos. Após 3 falhas consecutivas, para de pingar por 60s"
+  },
+  "evidencias": {
+    "habilitado": true,
+    "drive_folder_id": "1SRH4yOJc2DrG0aQspAek7RMH8w6yG_Yj",
+    "pasta_local": "evidencias",
+    "capturar_screenshot": true,
+    "upload_automatico": true,
+    "retry_upload_no_proximo_ciclo": true,
+    "comentario": "Sistema de evidências com JSON estruturado + screenshots + checksums SHA256"
+  },
+  "validacao_pos_save": {
+    "habilitada": true,
+    "verificar_campos_vazios": true,
+    "parar_se_campos_preenchidos": true,
+    "comentario": "Valida se campos estão VAZIOS após Ctrl+S. Se ainda tiverem dados = erro no salvamento"
+  },
+  "metadata": {
+    "versao_rpa": "Genesys 1.0",
+    "incluir_usuario_windows": true,
+    "incluir_nome_maquina": true
+  }
+}
