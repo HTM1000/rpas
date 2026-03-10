@@ -906,45 +906,17 @@ def validar_campos_oracle_ocr(coords, item, quantidade, referencia, sub_o, end_o
 # =================== FUNÇÕES DE AUTOMAÇÃO ===================
 def safe_write(texto, contexto=""):
     """
-    Digita texto usando CLIPBOARD (Ctrl+V) - método mais confiável.
-    Evita completamente problemas como 'R10' virar 'R!0'.
-
-    Por que clipboard é melhor:
-    - Não depende do estado do teclado
-    - Não é afetado por teclas modificadoras "presas"
-    - Funciona com qualquer caractere (acentos, símbolos)
-    - Mais rápido que digitar caractere por caractere
+    Digita texto caractere por caractere com pyautogui.write().
     """
-    # Registrar no log de teclas
-    registrar_tecla("clipboard", f"'{texto}'", contexto)
+    registrar_tecla("write", f"'{texto}'", contexto)
 
-    # Salvar clipboard atual para restaurar depois
-    try:
-        clipboard_anterior = pyperclip.paste()
-    except:
-        clipboard_anterior = ""
-
-    # 1. Liberar TODAS as teclas modificadoras
     for tecla in ['shift', 'ctrl', 'alt', 'win']:
         pyautogui.keyUp(tecla)
         registrar_tecla("keyUp", tecla, "liberando modificador")
     time.sleep(0.05)
 
-    # 2. Copiar texto para clipboard
-    pyperclip.copy(texto)
-    time.sleep(0.05)
-
-    # 3. Colar com Ctrl+V
-    registrar_tecla("hotkey", "ctrl+v", f"colando '{texto}'")
-    pyautogui.hotkey('ctrl', 'v')
+    pyautogui.write(str(texto), interval=0.03)
     time.sleep(0.1)
-
-    # 4. Restaurar clipboard anterior (opcional, para não perder dados do usuário)
-    try:
-        time.sleep(0.05)
-        pyperclip.copy(clipboard_anterior)
-    except:
-        pass
 
 def safe_press(tecla, contexto=""):
     """Pressiona uma tecla e registra no log"""
@@ -3244,7 +3216,7 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
                         else:
                             pyautogui.press("delete")
                             pyautogui.click(coords["sub_destino"])
-                            time.sleep(0.15)
+                            time.sleep(0.2)
                             safe_write(sub_d, contexto="Sub.Destino")
 
                         safe_press("tab", contexto="após Sub.Destino")
@@ -3279,7 +3251,7 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
                         else:
                             pyautogui.press("delete")
                             pyautogui.click(coords["end_destino"])
-                            time.sleep(0.15)
+                            time.sleep(0.2)
                             safe_write(end_d, contexto="End.Destino")
 
                         safe_press("tab", contexto="após End.Destino")
@@ -3302,55 +3274,37 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
                                 continue
 
                     # ═══════════════════════════════════════════════════════════════
-                    # PREENCHER QUANTIDADE - COM CORREÇÃO AUTOMÁTICA E DETECÇÃO DIFERENCIAL
+                    # PREENCHER QUANTIDADE - DETECÇÃO DIFERENCIAL (baseline pré-digitação)
                     # ═══════════════════════════════════════════════════════════════
                     gui_log(f"[QUANTIDADE] Preenchendo quantidade: {quantidade}")
 
-                    # 1️⃣ CAPTURAR PIXELS AMARELOS ANTES
-                    gui_log("[QUANTIDADE] 📸 Capturando baseline de pixels amarelos ANTES...")
-                    pixels_amarelos_antes = contar_pixels_cor("amarelo")
-                    gui_log(f"[QUANTIDADE] Baseline amarelo: {pixels_amarelos_antes} pixels")
-
-                    # 2️⃣ PREENCHER QUANTIDADE
                     if MODO_TESTE:
                         gui_log(f"[MODO TESTE] Simulando preenchimento de Quantidade: '{quantidade}'")
                         time.sleep(0.3)
                     else:
                         digitar_campo(coords["quantidade"][0], coords["quantidade"][1], quantidade, "Quantidade")
 
-                    # 3️⃣ SAIR DO CAMPO (TAB) - AQUI O MODAL PODE APARECER
+                    # TAB — modal de quantidade negativa aparece aqui
                     gui_log("[QUANTIDADE] >> Pressionando TAB para sair do campo...")
                     if not MODO_TESTE:
                         safe_press("tab", contexto="após Quantidade")
                     gui_log("[QUANTIDADE] << TAB pressionado")
 
-                    gui_log("[QUANTIDADE] Aguardando 1.0s...")
-                    time.sleep(1.0)
-                    gui_log(f"[QUANTIDADE] ✅ Quantidade preenchida e verificada")
+                    gui_log("[QUANTIDADE] Aguardando 2.0s...")
+                    time.sleep(2.0)
+                    gui_log(f"[QUANTIDADE] ✅ Quantidade preenchida")
 
-                    # 4️⃣ DETECÇÃO DIFERENCIAL - Comparar ANTES vs DEPOIS
-                    gui_log("[QTD NEG] ═══════════════════════════════════════════════")
-                    gui_log("[QTD NEG] 🔍 DETECÇÃO DIFERENCIAL - Quantidade Negativa")
-                    gui_log("[QTD NEG] ═══════════════════════════════════════════════")
-
-                    modal_qtd_neg = detectar_modal_diferencial(
-                        cor_esperada="amarelo",
-                        pixels_antes=pixels_amarelos_antes,
-                        threshold_aumento=500  # 500 pixels a mais = modal apareceu
-                    )
+                    # Detectar modal de quantidade negativa pela imagem (mais confiável que pixel counting
+                    # pois o triângulo amarelo do modal é pequeno e se confunde com o ruído do Oracle UI)
+                    caminho_qtd_neg = os.path.join(base_path, "informacoes", "qtd_negativa.png")
+                    modal_qtd_neg = detectar_imagem_opencv(caminho_qtd_neg, confidence=0.70, timeout=1)
+                    gui_log(f"[QTD NEG] Detecção por imagem: {'MODAL ENCONTRADO' if modal_qtd_neg else 'sem modal'}")
 
                     if modal_qtd_neg:
                         gui_log("⚠️ [QTD NEG] MODAL DETECTADO (ícone amarelo)!")
-                        time.sleep(0.2)
-                        gui_log("[QTD NEG] >> Pressionando ENTER (fechar modal)...")
                         if not MODO_TESTE:
-                            safe_press("enter", contexto="fechar modal Qtd Negativa")
-                        gui_log("[QTD NEG] << ENTER pressionado")
+                            safe_press("enter", contexto="OK - fechar modal Qtd Negativa")
                         time.sleep(0.5)
-                        gui_log("✅ [QTD NEG] Modal fechado!")
-
-                        # Marcar como erro e pular
-                        gui_log("❌ [QTD NEG] Quantidade negativa NÃO É PERMITIDA")
                         gui_log("[QTD NEG] 🧹 Pressionando F6 para limpar formulário...")
                         if not MODO_TESTE:
                             safe_press('f6', contexto="limpar após Qtd Negativa")
@@ -3420,7 +3374,7 @@ def etapa_05_executar_rpa_oracle(config, primeiro_ciclo=False):
                             if not val_lido.strip():
                                 campo_vazio = nome_cv
                                 break
-                            gui_log(f"[VALIDAÇÃO] {nome_cv}: preenchido ✅")
+                            gui_log(f"[VALIDAÇÃO] {nome_cv}: '{val_lido}' ✅")
 
                     if campo_vazio:
                         gui_log(f"[VALIDAÇÃO] ❌ Campo '{campo_vazio}' está vazio — limpando e pulando")
