@@ -26,10 +26,18 @@ def _tentar_parse(texto: str):
         return None
 
 
-def parse_zsd106(linhas: list[dict], colunas: list[str]) -> tuple[list[dict], list[str]]:
+def parse_zsd106(linhas: list[dict], colunas: list[str]) -> tuple[list[dict], list[str], set[str]]:
     """`linhas` = uma lista de dicts (uma por linha do export, valores como
     string — igual `df.to_dict('records')` de `ler_planilha` devolve).
-    Retorna (transportes, linhas_invalidas)."""
+    Retorna (transportes, linhas_invalidas, transportes_com_linha_invalida).
+
+    `transportes_com_linha_invalida` é o conjunto de `numero_transporte` que
+    tiveram PELO MENOS UMA linha rejeitada nesta leitura. Isso NÃO tira os
+    itens válidos do transporte (eles continuam em `transportes` normalmente)
+    — serve só pra o writer saber que esse transporte não deve ser tratado
+    como "leitura completa" pra fins de apagar/zerar item que sumiu: uma
+    linha malformada isolada (célula de peso corrompida etc.) não pode ser
+    lida como "o item realmente não existe mais no SAP" (ver zsd106_writer)."""
     mapa = mapear_colunas(colunas, COLUNAS_OBRIGATORIAS)
     col_fornecimento = mapear_coluna_opcional(colunas, "Fornecimento")
     col_ordem_venda = mapear_coluna_opcional(colunas, "Doc. Modelo") or mapear_coluna_opcional(
@@ -39,6 +47,7 @@ def parse_zsd106(linhas: list[dict], colunas: list[str]) -> tuple[list[dict], li
     ordem_transportes: list[str] = []
     grupos: dict = {}
     linhas_invalidas: list[str] = []
+    transportes_com_linha_invalida: set[str] = set()
 
     for i, linha in enumerate(linhas):
         numero_transporte = remover_zeros_esquerda(str(linha.get(mapa["N° Transporte"], "")).strip())
@@ -73,6 +82,7 @@ def parse_zsd106(linhas: list[dict], colunas: list[str]) -> tuple[list[dict], li
 
         if motivos:
             linhas_invalidas.append(f"Transporte {numero_transporte} (linha {i + 1}): " + ", ".join(motivos))
+            transportes_com_linha_invalida.add(numero_transporte)
             continue
 
         if numero_transporte not in grupos:
@@ -136,4 +146,4 @@ def parse_zsd106(linhas: list[dict], colunas: list[str]) -> tuple[list[dict], li
             }
         )
 
-    return transportes, linhas_invalidas
+    return transportes, linhas_invalidas, transportes_com_linha_invalida
