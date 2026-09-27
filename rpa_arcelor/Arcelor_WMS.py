@@ -85,6 +85,13 @@ def resource_path(relative_path: str) -> str:
     base_path = sys._MEIPASS if getattr(sys, "_MEIPASS", False) else os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
+def caminho_credenciais_servico() -> str:
+    """Onde o robô procura credenciais_servico.json: ao lado do .exe quando
+    empacotado (nunca embutido nele — tem senha real), ao lado do script em
+    desenvolvimento."""
+    base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.abspath(".")
+    return os.path.join(base, "credenciais_servico.json")
+
 def _com_init():
     if pythoncom:
         try:
@@ -563,8 +570,7 @@ class _TextRedirector:
     def write(self, msg: str):
         if not msg:
             return
-        self.widget.insert("end", msg)
-        self.widget.see("end")
+        self.widget.after(0, lambda: (self.widget.insert("end", msg), self.widget.see("end")))
     def flush(self):
         pass
 
@@ -645,12 +651,26 @@ def criar_gui(usuario: dict):
                 foreground="red" if invalidos else "green",
             )
 
+    # ZSD106 e VT12 disputam a MESMA sessão SAP ativa (authenticate_sap() sempre
+    # pega o mesmo wnd[0]) e cada um é uma sequência de navegação de várias
+    # etapas que pressupõe controle exclusivo da tela. Sem isso, clicar nos dois
+    # perto um do outro faz duas threads brigarem pelo mesmo SAP GUI e gerar
+    # exports corrompidos que seriam gravados direto no Supabase de produção.
+    # O ZV74 não mexe no SAP (só lê planilha exportada manualmente), então fica
+    # de fora dessa exclusão.
+    _sap_ocupado = {"valor": False}
+
     def executar_zsd106_gui():
         validos, invalidos = parse_transportes(entrada_expedicao.get("1.0", "end"))
         if not validos:
             messagebox.showwarning("Atenção", "Cole ao menos um transporte válido (somente dígitos).")
             return
+        if _sap_ocupado["valor"]:
+            messagebox.showwarning("Atenção", "Já existe um fluxo SAP em andamento (ZSD106/VT12). Aguarde terminar.")
+            return
+        _sap_ocupado["valor"] = True
         btn_zsd106.state(["disabled"])
+        btn_vt12.state(["disabled"])
 
         def trabalho():
             _com_init()
@@ -677,7 +697,8 @@ def criar_gui(usuario: dict):
                 print(f"\n[ERRO] Rodar ZSD106: {e}\n")
             finally:
                 _com_uninit()
-                root.after(0, lambda: btn_zsd106.state(["!disabled"]))
+                _sap_ocupado["valor"] = False
+                root.after(0, lambda: (btn_zsd106.state(["!disabled"]), btn_vt12.state(["!disabled"])))
 
         threading.Thread(target=trabalho, daemon=True).start()
 
@@ -686,6 +707,11 @@ def criar_gui(usuario: dict):
         if not validos:
             messagebox.showwarning("Atenção", "Cole ao menos um transporte válido (somente dígitos).")
             return
+        if _sap_ocupado["valor"]:
+            messagebox.showwarning("Atenção", "Já existe um fluxo SAP em andamento (ZSD106/VT12). Aguarde terminar.")
+            return
+        _sap_ocupado["valor"] = True
+        btn_zsd106.state(["disabled"])
         btn_vt12.state(["disabled"])
 
         def trabalho():
@@ -712,7 +738,8 @@ def criar_gui(usuario: dict):
                 print(f"\n[ERRO] Rodar VT12: {e}\n")
             finally:
                 _com_uninit()
-                root.after(0, lambda: btn_vt12.state(["!disabled"]))
+                _sap_ocupado["valor"] = False
+                root.after(0, lambda: (btn_zsd106.state(["!disabled"]), btn_vt12.state(["!disabled"])))
 
         threading.Thread(target=trabalho, daemon=True).start()
 
@@ -769,7 +796,7 @@ if __name__ == "__main__":
     from auth_servico import carregar_credenciais_servico
 
     try:
-        credenciais = carregar_credenciais_servico(resource_path("credenciais_servico.json"))
+        credenciais = carregar_credenciais_servico(caminho_credenciais_servico())
         usuario = autenticar_usuario(credenciais["email"], credenciais["senha"])
     except (FileNotFoundError, ValueError) as e:
         usuario = None
