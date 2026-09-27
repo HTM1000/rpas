@@ -47,7 +47,7 @@ class TestParseZsd106(unittest.TestCase):
                 {"sku": "249901", "quantidade": 1496.0, "por_unidade": False, "unidades": None, "ordens": []},
                 {
                     "sku": "101802", "quantidade": 518.28, "por_unidade": True, "unidades": 70.0,
-                    "ordens": [{"fornecimento": "", "ordem_venda": "", "quantidade": 518.28, "unidades": 70.0}],
+                    "ordens": [],
                 },
             ],
         )

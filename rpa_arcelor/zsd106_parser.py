@@ -92,7 +92,7 @@ def parse_zsd106(linhas: list[dict], colunas: list[str]) -> tuple[list[dict], li
         if por_unidade:
             item["unidades"] = (item["unidades"] or 0.0) + unidade
 
-        if por_unidade or fornecimento or ordem_venda:
+        if fornecimento or ordem_venda:
             chave_ordem = f"{fornecimento}|{ordem_venda}"
             ordem_item = item["ordens"].setdefault(
                 chave_ordem,
