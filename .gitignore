@@ -4,6 +4,9 @@
 CredenciaisOracle.json
 token.json
 
+# Workspace de scratch do superpowers (ledgers/briefs/reviews de execução de planos)
+.superpowers/
+
 # ==========================================
 # Sistema operacional
 # ==========================================
@@ -202,3 +205,10 @@ lerna-debug.log*
 *.old
 *.orig
 *.rej
+
+# Pacotes de entrega gerados por empacotar.ps1
+entregas/
+
+# Chaves de assinatura de codigo - NUNCA versionar
+*.pfx
+*.p12
