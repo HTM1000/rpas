@@ -129,12 +129,23 @@ def _load_png(filename: str, max_height: int = 80):
 
 # ------------------- AUTENTICAÇÃO ---------------------
 def autenticar_usuario(email: str, senha: str) -> dict | None:
-    """Login pelo Supabase Auth (e-mail + senha). Guarda o cliente autenticado em _supabase."""
+    """Login da conta de serviço via a edge function `robo-login` (não
+    `sign_in_with_password` direto): o Supabase do projeto exige captcha (Turnstile)
+    em todo login por senha — a mesma proteção que o `wmsarcelormital` usa pros
+    operadores —, e um robô não tem como resolver captcha. `robo-login` autentica
+    do lado do servidor com a `service_role` (que nunca sai de lá) só para o
+    e-mail de serviço configurado nela, contornando o captcha sem enfraquecer a
+    proteção do login público. Guarda o cliente autenticado em `_supabase`."""
     global _supabase
     try:
         sb = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
-        resp = sb.auth.sign_in_with_password({"email": email, "password": senha})
-        user = resp.user
+        resp = sb.functions.invoke(
+            "robo-login",
+            {"body": {"email": email, "senha": senha}, "responseType": "json"},
+        )
+        sessao = resp["session"]
+        auth_resp = sb.auth.set_session(sessao["access_token"], sessao["refresh_token"])
+        user = auth_resp.user
     except Exception:
         return None
     if not user:
@@ -142,7 +153,7 @@ def autenticar_usuario(email: str, senha: str) -> dict | None:
 
     perfil = {}
     try:
-        r = sb.table("usuarios").select("login,is_active,nivel_acesso").eq("user_id", user.id).limit(1).execute()
+        r = sb.table("usuarios").select("id,login,is_active,nivel_acesso").eq("user_id", user.id).limit(1).execute()
         perfil = r.data[0] if r.data else {}
     except Exception:
         pass  # sem permissão de leitura do próprio perfil: quem manda nas gravações é o RLS
@@ -156,6 +167,11 @@ def autenticar_usuario(email: str, senha: str) -> dict | None:
     _supabase = sb
     return {
         "id": user.id,
+        # `usuarios.id` (tabela de perfil interna) — é o que `transportes.usuario_id`
+        # referencia via FK (transportes_usuario_id_fkey), NUNCA o `id` do Supabase
+        # Auth acima. Pode vir None se o perfil não existir/não for legível — quem
+        # grava com isso trata None como "sem usuário" (campo é nullable).
+        "usuarios_id": perfil.get("id"),
         "email": email,
         "login": perfil.get("login") or email,
         "nivel_acesso": perfil.get("nivel_acesso") or "",
@@ -538,31 +554,49 @@ def criar_gui(usuario: dict):
 
     top = ttk.Frame(root, padding=12)
     top.grid(row=0, column=0, sticky="nsew")
-    top.columnconfigure(1, weight=1)
+    top.columnconfigure(0, weight=1)
+
+    # Cabeçalho em linha própria — logo e usuário não dividem linha com mais
+    # nada, então a altura da linha se ajusta à logo inteira (antes ela vivia
+    # num rowspan sobre linhas de texto/separador que não reservavam altura
+    # suficiente, e a imagem aparecia cortada).
+    header = ttk.Frame(top)
+    header.grid(row=0, column=0, sticky="ew")
+    header.columnconfigure(1, weight=1)
 
     logo_img = _load_png(HEADER_LOGO)
     if logo_img:
-        lbl_logo = ttk.Label(top, image=logo_img)
+        lbl_logo = ttk.Label(header, image=logo_img)
         lbl_logo.image = logo_img
-        lbl_logo.grid(row=0, column=0, rowspan=3, padx=(0, 16), sticky="nw")
+        lbl_logo.grid(row=0, column=0, padx=(0, 16), sticky="w")
 
     ttk.Label(
-        top, text=f"Usuário: {usuario.get('login', '')}  |  {usuario.get('nivel_acesso', '')}", foreground="gray"
+        header, text=f"Usuário: {usuario.get('login', '')}  |  {usuario.get('nivel_acesso', '')}", foreground="gray"
     ).grid(row=0, column=1, sticky="w")
 
-    ttk.Separator(top, orient="horizontal").grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 8))
-    ttk.Label(top, text="Expedição", font=("", 10, "bold")).grid(row=2, column=1, sticky="w")
-    ttk.Label(top, text="Cole aqui os transportes copiados do Excel (um por linha):").grid(
-        row=3, column=1, sticky="w", pady=(4, 2)
+    ttk.Separator(top, orient="horizontal").grid(row=1, column=0, sticky="ew", pady=(8, 12))
+
+    # Corpo em 2 colunas lado a lado — Expedição e Recebimento, cada uma com
+    # sua própria caixa de colar e botões.
+    corpo = ttk.Frame(top)
+    corpo.grid(row=2, column=0, sticky="nsew")
+    corpo.columnconfigure(0, weight=1)
+    corpo.columnconfigure(1, weight=1)
+
+    coluna_expedicao = ttk.Frame(corpo)
+    coluna_expedicao.grid(row=0, column=0, sticky="new", padx=(0, 16))
+    ttk.Label(coluna_expedicao, text="Expedição", font=("", 11, "bold")).grid(row=0, column=0, sticky="w")
+    ttk.Label(coluna_expedicao, text="Cole aqui os transportes copiados do Excel (um por linha):").grid(
+        row=1, column=0, sticky="w", pady=(4, 2)
     )
-    entrada_expedicao = ScrolledText(top, width=40, height=9)
-    entrada_expedicao.grid(row=4, column=1, sticky="w")
+    entrada_expedicao = ScrolledText(coluna_expedicao, width=40, height=9)
+    entrada_expedicao.grid(row=2, column=0, sticky="ew")
 
-    lbl_contagem_expedicao = ttk.Label(top, text="Nenhum transporte informado.", foreground="gray")
-    lbl_contagem_expedicao.grid(row=5, column=1, sticky="w", pady=(4, 0))
+    lbl_contagem_expedicao = ttk.Label(coluna_expedicao, text="Nenhum transporte informado.", foreground="gray")
+    lbl_contagem_expedicao.grid(row=3, column=0, sticky="w", pady=(4, 0))
 
-    botoes_expedicao = ttk.Frame(top)
-    botoes_expedicao.grid(row=6, column=1, sticky="w", pady=(8, 0))
+    botoes_expedicao = ttk.Frame(coluna_expedicao)
+    botoes_expedicao.grid(row=4, column=0, sticky="w", pady=(8, 0))
     btn_zsd106 = ttk.Button(botoes_expedicao, text="Rodar ZSD106", width=16)
     btn_zsd106.grid(row=0, column=0, padx=(0, 8))
     btn_vt12 = ttk.Button(botoes_expedicao, text="Rodar VT12", width=16)
@@ -570,19 +604,25 @@ def criar_gui(usuario: dict):
     btn_zv74 = ttk.Button(botoes_expedicao, text="Rodar ZV74", width=16)
     btn_zv74.grid(row=0, column=2)
 
-    ttk.Separator(top, orient="horizontal").grid(row=7, column=0, columnspan=2, sticky="ew", pady=(16, 8))
-    ttk.Label(top, text="Recebimento", font=("", 10, "bold")).grid(row=8, column=1, sticky="w")
-    ttk.Label(top, text="Cole aqui os transportes copiados do Excel (um por linha):").grid(
-        row=9, column=1, sticky="w", pady=(4, 2)
-    )
-    entrada_recebimento = ScrolledText(top, width=40, height=6)
-    entrada_recebimento.grid(row=10, column=1, sticky="w")
+    separador_colunas = ttk.Separator(corpo, orient="vertical")
+    separador_colunas.grid(row=0, column=1, sticky="ns", padx=(0, 0))
 
-    botoes_recebimento = ttk.Frame(top)
-    botoes_recebimento.grid(row=11, column=1, sticky="w", pady=(8, 0))
+    coluna_recebimento = ttk.Frame(corpo)
+    coluna_recebimento.grid(row=0, column=1, sticky="new", padx=(16, 0))
+    ttk.Label(coluna_recebimento, text="Recebimento", font=("", 11, "bold")).grid(row=0, column=0, sticky="w")
+    ttk.Label(coluna_recebimento, text="Cole aqui os transportes copiados do Excel (um por linha):").grid(
+        row=1, column=0, sticky="w", pady=(4, 2)
+    )
+    entrada_recebimento = ScrolledText(coluna_recebimento, width=40, height=6)
+    entrada_recebimento.grid(row=2, column=0, sticky="ew")
+
+    botoes_recebimento = ttk.Frame(coluna_recebimento)
+    botoes_recebimento.grid(row=3, column=0, sticky="w", pady=(8, 0))
     btn_zsd16 = ttk.Button(botoes_recebimento, text="Rodar ZSD16 (em breve)", width=22)
     btn_zsd16.grid(row=0, column=0)
     btn_zsd16.state(["disabled"])
+
+    ttk.Separator(top, orient="horizontal").grid(row=3, column=0, sticky="ew", pady=(16, 0))
 
     txt = ScrolledText(root, width=110, height=20)
     txt.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
@@ -652,7 +692,7 @@ def criar_gui(usuario: dict):
                         f"apagado/zerado por segurança): {sorted(transportes_com_linha_invalida)}"
                     )
                 resumo = gravar_zsd106(
-                    _supabase, transportes, _usuario_logado.get("id"), transportes_com_linha_invalida
+                    _supabase, transportes, _usuario_logado.get("usuarios_id"), transportes_com_linha_invalida
                 )
                 print(f"✓ ZSD106: {resumo}")
             except Exception as e:
@@ -727,7 +767,7 @@ def criar_gui(usuario: dict):
                 wb = openpyxl.load_workbook(filepath, data_only=True)
                 linhas = list(wb.active.iter_rows(values_only=True))
                 resultado = parse_zv74(linhas)
-                resumo = gravar_zv74(_supabase, resultado, _usuario_logado.get("id"))
+                resumo = gravar_zv74(_supabase, resultado, _usuario_logado.get("email"))
                 print(f"✓ ZV74: {resumo}")
             except Exception as e:
                 print(f"\n[ERRO] Rodar ZV74: {e}\n")
@@ -754,20 +794,26 @@ def _mostrar_erro_fatal(mensagem: str) -> None:
     root.destroy()
 
 
-if __name__ == "__main__":
-    from auth_servico import carregar_credenciais_servico
+# Credenciais fixas embutidas no código/exe — decisão explícita do usuário
+# (27/09/2026), ciente de que isso reverte a proteção original (credenciais
+# fora do exe, ver auth_servico.py/CLAUDE.md) e de que a senha fica extraível
+# de qualquer cópia do .exe (ex.: descompactando com pyinstxtractor). É a
+# conta pessoal do João (joao.oliveira@hawktech.com.br), não uma conta de
+# serviço dedicada — decisão do usuário (28/09/2026): ações do robô aparecem
+# na auditoria (usuario_id, log_sessoes) como sendo dele, não "o robô".
+_CREDENCIAIS_FIXAS = {"email": "joao.oliveira@hawktech.com.br", "senha": "Hawktech!2026#"}
 
+if __name__ == "__main__":
     try:
-        credenciais = carregar_credenciais_servico(caminho_credenciais_servico())
-        usuario = autenticar_usuario(credenciais["email"], credenciais["senha"])
-    except (FileNotFoundError, ValueError) as e:
+        usuario = autenticar_usuario(_CREDENCIAIS_FIXAS["email"], _CREDENCIAIS_FIXAS["senha"])
+    except Exception as e:
         usuario = None
         _mostrar_erro_fatal(str(e))
     else:
         if not usuario:
             _mostrar_erro_fatal(
                 "Falha ao autenticar a conta de serviço do robô. "
-                "Verifique credenciais_servico.json (e-mail/senha, e se a role 'conferente' está atribuída)."
+                "Verifique o usuário/senha fixados no código e se a role 'conferente' está atribuída."
             )
 
     if usuario:
