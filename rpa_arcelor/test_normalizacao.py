@@ -64,19 +64,11 @@ class TestPeso(unittest.TestCase):
         self.assertEqual(parse_numero_zsd106("112.86"), 112.86)
         self.assertEqual(parse_numero_zsd106("1150"), 1150.0)
 
-    def test_parse_numero_zsd106_ambiguo_sem_virgula_levanta_erro(self):
-        # "1.496" sem vírgula bate com o padrão de milhar do Excel (grupos de
-        # 3 dígitos após o ponto) — pode ser 1.496 ou 1496, não dá pra
-        # adivinhar com segurança contra um formato de SAP ainda não validado.
-        with self.assertRaises(ValueError):
-            parse_numero_zsd106("1.496")
-
-    def test_parse_numero_zsd106_casos_nao_ambiguos_continuam_ok(self):
-        # Com vírgula, nunca é ambíguo (ponto é milhar, vírgula é decimal).
-        self.assertEqual(parse_numero_zsd106("1.150,86"), 1150.86)
-        # Decimal comum (não bate no padrão de milhar: menos de 3 dígitos
-        # depois do ponto) continua parseando normalmente.
-        self.assertEqual(parse_numero_zsd106("112.86"), 112.86)
+    def test_parse_numero_zsd106_trata_ambiguidade_como_decimal_por_ora(self):
+        # "1.496" é genuinamente ambíguo (pode ser 1496 ou 1,496kg) — sem
+        # validar contra SAP real não dá pra saber qual convenção o export
+        # usa. Trata como decimal (não rejeita) até essa validação acontecer.
+        self.assertEqual(parse_numero_zsd106("1.496"), 1.496)
 
 
 if __name__ == "__main__":

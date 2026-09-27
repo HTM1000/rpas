@@ -72,13 +72,6 @@ def parse_peso_extrato(valor: str) -> float:
         return 0.0
 
 
-# Mesmo padrão usado em Arcelor_WMS.parse_transportes para reconhecer um
-# número que o Excel formatou com separador de milhar (ex.: "5.100.132.776"
-# ou, no caso de um peso, "1.496"): um ou mais grupos de EXATAMENTE 3 dígitos
-# depois de um ponto, sem vírgula nenhuma na string.
-_PADRAO_MILHAR_AMBIGUO = re.compile(r"\d{1,3}(\.\d{3})+")
-
-
 def parse_numero_zsd106(valor: str) -> float:
     """Aceita vírgula decimal brasileira ('1.150,86') OU ponto decimal já
     convertido (ex.: pandas lendo um .xlsx real de verdade, '112.86' sem
@@ -86,21 +79,15 @@ def parse_numero_zsd106(valor: str) -> float:
     validado em SAP (ver CLAUDE.md do rpa_arcelor). Se a string tiver vírgula,
     ponto é milhar; senão, ponto é decimal.
 
-    Uma string SEM vírgula que também bate com o padrão de milhar do Excel
-    (ex.: "1.496") é AMBÍGUA — pode ser 1.496 (decimal) ou 1496 (milhar sem
-    decimal, convenção já confirmada no export irmão do VT12) — e levanta
-    ValueError em vez de adivinhar, porque nunca validamos o formato real do
-    ZSD106 contra um SAP de verdade e um erro aqui grava peso errado direto
-    em produção."""
+    Um valor sem vírgula e com exatamente 3 dígitos após o ponto (ex.:
+    '1.496') é GENUINAMENTE AMBÍGUO — pode ser '1496' (milhar) ou '1,496' kg
+    (peso com precisão de grama, numeric(14,3), o padrão normal de pesos
+    abaixo de 1000kg). Não dá para decidir isso por regex sem saber qual
+    convenção o export real do SAP usa (pendência conhecida, ver CLAUDE.md) —
+    tentar adivinhar rejeitaria a maioria dos pesos válidos abaixo de 1000kg,
+    que é pior que não tentar. Trata como decimal (mesma regra de sempre) até
+    essa validação acontecer contra SAP real."""
     texto = valor.strip()
     if "," in texto:
         texto = texto.replace(".", "").replace(",", ".")
-        return float(texto)
-    if _PADRAO_MILHAR_AMBIGUO.fullmatch(texto):
-        raise ValueError(
-            f'Valor "{texto}" é ambíguo: pode ser separador de milhar (ex.: {texto.replace(".", "")}) '
-            f'ou um decimal literal (ex.: {texto}) — o formato real do export do ZSD106 ainda não foi '
-            f"confirmado contra um SAP real (ver CLAUDE.md do rpa_arcelor). Não dá pra adivinhar com "
-            f"segurança um valor que vai gravar peso/quantidade em produção."
-        )
     return float(texto)
