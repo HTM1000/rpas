@@ -401,25 +401,37 @@ def _salvar_lista_local(session, filepath: str) -> bool:
     mesmo padrão defensivo de `_exportar_grid` — reconhece o diálogo pelo
     controle que ele tem, não aperta OK às cegas."""
     radio = "wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150/radSPOPLI-SELFLAG[1,0]"
+    anterior, repeticoes = None, 0
     for _ in range(8):
         _sap_aguardar(session)
         if session.Children.Count <= 1:
             break
         if _sap_existe(session, radio):
+            tipo = "opcao"
             session.findById(radio).select()
             session.findById("wnd[1]/tbar[0]/btn[0]").press()
-            continue
-        if _sap_existe(session, "wnd[1]/usr/ctxtDY_PATH"):
+        elif _sap_existe(session, "wnd[1]/usr/ctxtDY_PATH"):
+            tipo = "arquivo"
             session.findById("wnd[1]/usr/ctxtDY_PATH").text = PASTA_EXPORT + "\\"
             if _sap_existe(session, "wnd[1]/usr/ctxtDY_FILENAME"):
                 session.findById("wnd[1]/usr/ctxtDY_FILENAME").text = NOME_ARQ_VT12
             session.findById("wnd[1]/tbar[0]/btn[7]").press()
-            continue
-        break
+        else:
+            tipo = "desconhecido"
+        # o mesmo diálogo voltando várias vezes = algo não foi aceito; não fica apertando às cegas
+        repeticoes = repeticoes + 1 if tipo == anterior else 1
+        anterior = tipo
+        if repeticoes >= 3:
+            raise RuntimeError(f"diálogo '{tipo}' do VT12 não fecha (transação={session.Info.Transaction})")
+        if tipo == "desconhecido":
+            break
     return _aguardar_arquivo_estavel(filepath)
 
 
-def executar_vt12(session, transportes: list) -> str | None:
+VT12_STATUS_ATE = "7"  # filtro de status do transporte no VT12 (K_STTRG-HIGH), vindo do script gravado
+
+
+def executar_vt12(session, transportes: list[str]) -> str | None:
     """Abre o VT12, cola os transportes, roda a sequência de carregamento e
     salva como texto local em C:\\RPA. Adaptado de 'Script1 - VT12.vbs'
     (gravação original em SAP), com o mesmo tratamento defensivo de diálogos
@@ -438,7 +450,7 @@ def executar_vt12(session, transportes: list) -> str | None:
         session.findById("wnd[0]").sendVKey(0)
         _sap_aguardar(session)
 
-        _sap_id(session, "wnd[0]/usr/ctxtK_STTRG-HIGH").text = "7"
+        _sap_id(session, "wnd[0]/usr/ctxtK_STTRG-HIGH").text = VT12_STATUS_ATE
 
         _copiar_para_clipboard("\r\n".join(transportes))
         _sap_id(session, "wnd[0]/usr/btn%_K_TKNUM_%_APP_%-VALU_PUSH").press()
@@ -447,9 +459,9 @@ def executar_vt12(session, transportes: list) -> str | None:
         session.findById("wnd[0]").sendVKey(8)
         _sap_aguardar(session)
 
-        session.findById("wnd[0]/tbar[1]/btn[30]").press()
-        session.findById("wnd[0]/tbar[1]/btn[18]").press()
-        session.findById("wnd[0]/tbar[1]/btn[7]").press()
+        _sap_id(session, "wnd[0]/tbar[1]/btn[30]").press()
+        _sap_id(session, "wnd[0]/tbar[1]/btn[18]").press()
+        _sap_id(session, "wnd[0]/tbar[1]/btn[7]").press()
         _sap_aguardar(session)
 
         shell = _sap_id(
@@ -459,7 +471,7 @@ def executar_vt12(session, transportes: list) -> str | None:
         )
         shell.pressToolbarContextButton("&PRINT_BACK")
         shell.selectContextMenuItem("&PRINT_PREV")
-        session.findById("wnd[0]/mbar/menu[3]/menu[5]/menu[2]/menu[2]").select()
+        _sap_id(session, "wnd[0]/mbar/menu[3]/menu[5]/menu[2]/menu[2]").select()
         _sap_aguardar(session)
 
         if not _salvar_lista_local(session, filepath):
