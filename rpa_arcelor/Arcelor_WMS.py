@@ -2,9 +2,20 @@
 """
 Hawk Tech WMS - Arcelor Mittal.
 
-Fluxo: o usuário cola os transportes copiados do Excel -> clica em "Atualizar WMS" ->
-o RPA abre o ZSD106 no SAP, cola os transportes na seleção múltipla, executa, exporta a
-planilha para C:\\RPA -> lê a planilha e abastece o Supabase (upsert).
+GUI com 2 seções (Expedição / Recebimento). Expedição tem 3 botões
+independentes — "Rodar ZSD106", "Rodar VT12", "Rodar ZV74" — cada um cola os
+transportes colados na caixa de texto, roda a transação correspondente no SAP
+(ZSD106/VT12 via SAP GUI Scripting; ZV74 lê um .xlsx exportado manualmente por
+enquanto), faz o parsing do export e grava DIRETO no Supabase de produção do
+wmsarcelormital (mesmas tabelas/regras que `ImportarTransportesButton.tsx` já
+usa no caminho manual). Recebimento (ZSD16) ainda não existe — botão fica
+desabilitado, "em breve".
+
+Não tem modo simulação: os 3 botões de expedição gravam de verdade a cada
+execução, sem gate nenhum antes do write (decisão explícita do usuário,
+27/09/2026 — ver CLAUDE.md deste módulo). Autenticação é de uma conta de
+serviço fixa (sem tela de login pro operador) — ver `autenticar_usuario` e
+`auth_servico.carregar_credenciais_servico`.
 """
 import os
 import sys
@@ -39,18 +50,6 @@ SUPABASE_ANON_KEY = (
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im10ZGprc3loa3ZuY29neHBhY3piIiwi"
     "cm9sZSI6ImFub24iLCJpYXQiOjE3ODgyNzU5MzcsImV4cCI6MjEwMzg1MTkzN30.oq8mqh2N6eZAP-Dnr0gC1Hhm8gt0497n6LAAiizL8ow"
 )
-
-# "simulacao": lê a planilha e mostra no log o que iria gravar, sem escrever no banco.
-# "gravar":    faz o upsert de verdade (só depois de preencher MAPEAMENTO e validar).
-MODO_GRAVACAO = "simulacao"
-
-# Como cada tabela do banco é preenchida a partir das colunas da planilha do ZSD106.
-# Preencher depois de ver as colunas reais no log (modo simulação). Formato:
-#   "arc_transporte": {
-#       "conflito": "numero_tr",                       # coluna(s) única(s) usada(s) no upsert
-#       "colunas": {"Transporte": "numero_tr", ...},   # coluna da planilha -> coluna do banco
-#   }
-MAPEAMENTO: dict[str, dict] = {}
 
 # Export do SAP — pasta em C:\ acessível a qualquer usuário da máquina (mesmo padrão do CLR)
 PASTA_EXPORT = r"C:\RPA"
@@ -516,52 +515,6 @@ def ler_planilha(filepath: str) -> pd.DataFrame:
     return pd.DataFrame(dados, columns=cab)
 
 
-# --------------------------- BANCO ---------------------
-def gravar_no_banco(df: pd.DataFrame) -> bool:
-    """Upsert das linhas da planilha nas tabelas de MAPEAMENTO. Em modo simulação só mostra o que leu."""
-    print(f"📊 Planilha: {len(df)} linha(s), {len(df.columns)} coluna(s).")
-    print("   Colunas: " + " | ".join(str(c) for c in df.columns))
-    with pd.option_context("display.width", 200, "display.max_columns", 30, "display.max_colwidth", 22):
-        print(df.head(5).to_string(index=False))
-
-    if MODO_GRAVACAO != "gravar" or not MAPEAMENTO:
-        print("ℹ️ Modo simulação: nada foi gravado no Supabase (mapeamento das colunas ainda não configurado).")
-        return True
-
-    for tabela, cfg in MAPEAMENTO.items():
-        colunas = cfg["colunas"]
-        faltando = [c for c in colunas if c not in df.columns]
-        if faltando:
-            raise ValueError(f"Colunas da planilha não encontradas para '{tabela}': {faltando}")
-        registros = (
-            df[list(colunas)].rename(columns=colunas)
-            .replace("", None).drop_duplicates().to_dict("records")
-        )
-        for i in range(0, len(registros), 500):
-            _supabase.table(tabela).upsert(registros[i:i + 500], on_conflict=cfg["conflito"]).execute()
-        print(f"✅ {len(registros)} registro(s) enviados para '{tabela}'.")
-    return True
-
-
-# --------------------------- FLUXO ---------------------
-def fluxo_atualizar_wms(transportes: list[str]) -> bool:
-    """SAP (ZSD106) -> planilha -> Supabase. True só se todo o caminho concluiu."""
-    print("🔄 Iniciando atualização do WMS...")
-    session = authenticate_sap()
-    if not session:
-        print("❌ Falha ao conectar no SAP.")
-        return False
-
-    filepath = executar_zsd106(session, transportes)
-    if not filepath:
-        print("❌ Export ZSD106 falhou. Abortando.")
-        return False
-
-    # A planilha fica em C:\RPA para conferência; a próxima execução a substitui.
-    df = ler_planilha(filepath)
-    return gravar_no_banco(df)
-
-
 # ===================== GUI (Tkinter) =====================
 class _TextRedirector:
     """Redireciona stdout/stderr para o ScrolledText."""
@@ -688,10 +641,19 @@ def criar_gui(usuario: dict):
                 from zsd106_parser import parse_zsd106
                 from zsd106_writer import gravar_zsd106
 
-                transportes, linhas_invalidas = parse_zsd106(df.to_dict("records"), list(df.columns))
+                transportes, linhas_invalidas, transportes_com_linha_invalida = parse_zsd106(
+                    df.to_dict("records"), list(df.columns)
+                )
                 for aviso in linhas_invalidas:
                     print(f"⚠️ {aviso}")
-                resumo = gravar_zsd106(_supabase, transportes, _usuario_logado.get("id"))
+                if transportes_com_linha_invalida:
+                    print(
+                        f"⚠️ Transporte(s) com linha inválida nesta leitura (item ausente NÃO será "
+                        f"apagado/zerado por segurança): {sorted(transportes_com_linha_invalida)}"
+                    )
+                resumo = gravar_zsd106(
+                    _supabase, transportes, _usuario_logado.get("id"), transportes_com_linha_invalida
+                )
                 print(f"✓ ZSD106: {resumo}")
             except Exception as e:
                 print(f"\n[ERRO] Rodar ZSD106: {e}\n")
