@@ -555,70 +555,6 @@ def fluxo_atualizar_wms(transportes: list[str]) -> bool:
     return gravar_no_banco(df)
 
 
-# ===================== TELA DE LOGIN =====================
-def criar_tela_login() -> dict | None:
-    """Tela de login. Retorna dados do usuário logado ou None se fechar sem logar."""
-    resultado = {"usuario": None}
-
-    root = tk.Tk()
-    root.title("Hawk Tech WMS — Arcelor Mittal — Login")
-    root.resizable(False, False)
-    _set_window_icon(root)
-
-    frame = ttk.Frame(root, padding=30)
-    frame.grid(sticky="nsew")
-
-    logo_img = _load_png(HEADER_LOGO, max_height=60)
-    if logo_img:
-        lbl_logo = ttk.Label(frame, image=logo_img)
-        lbl_logo.image = logo_img
-        lbl_logo.grid(row=0, column=0, columnspan=2, pady=(0, 16))
-
-    ttk.Label(frame, text="E-mail:").grid(row=1, column=0, sticky="e", padx=6, pady=6)
-    entry_email = ttk.Entry(frame, width=32)
-    entry_email.grid(row=1, column=1, padx=6, pady=6)
-
-    ttk.Label(frame, text="Senha:").grid(row=2, column=0, sticky="e", padx=6, pady=6)
-    entry_senha = ttk.Entry(frame, width=32, show="*")
-    entry_senha.grid(row=2, column=1, padx=6, pady=6)
-
-    lbl_erro = ttk.Label(frame, text="", foreground="red")
-    lbl_erro.grid(row=3, column=0, columnspan=2, pady=(4, 0))
-
-    btn_entrar = ttk.Button(frame, text="Entrar", width=20)
-    btn_entrar.grid(row=4, column=0, columnspan=2, pady=(12, 0))
-
-    def tentar_login(event=None):
-        email = entry_email.get().strip()
-        senha = entry_senha.get().strip()
-        if not email or not senha:
-            lbl_erro.config(text="Preencha e-mail e senha.")
-            return
-        if "@" not in email:
-            lbl_erro.config(text="Use o e-mail cadastrado (não o login).")
-            return
-        btn_entrar.state(["disabled"])
-        lbl_erro.config(text="Autenticando...")
-        root.update()
-        usuario = autenticar_usuario(email, senha)
-        if usuario:
-            resultado["usuario"] = usuario
-            root.destroy()
-        else:
-            lbl_erro.config(text="E-mail ou senha inválidos, ou usuário inativo.")
-            btn_entrar.state(["!disabled"])
-
-    btn_entrar.configure(command=tentar_login)
-    entry_senha.bind("<Return>", tentar_login)
-    entry_email.bind("<Return>", lambda e: entry_senha.focus())
-
-    root.protocol("WM_DELETE_WINDOW", root.destroy)
-    entry_email.focus()
-    root.mainloop()
-
-    return resultado["usuario"]
-
-
 # ===================== GUI (Tkinter) =====================
 class _TextRedirector:
     """Redireciona stdout/stderr para o ScrolledText."""
@@ -655,21 +591,39 @@ def criar_gui(usuario: dict):
         top, text=f"Usuário: {usuario.get('login', '')}  |  {usuario.get('nivel_acesso', '')}", foreground="gray"
     ).grid(row=0, column=1, sticky="w")
 
+    ttk.Separator(top, orient="horizontal").grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 8))
+    ttk.Label(top, text="Expedição", font=("", 10, "bold")).grid(row=2, column=1, sticky="w")
     ttk.Label(top, text="Cole aqui os transportes copiados do Excel (um por linha):").grid(
-        row=1, column=1, sticky="w", pady=(8, 2)
+        row=3, column=1, sticky="w", pady=(4, 2)
     )
-    entrada = ScrolledText(top, width=40, height=9)
-    entrada.grid(row=2, column=1, sticky="w")
+    entrada_expedicao = ScrolledText(top, width=40, height=9)
+    entrada_expedicao.grid(row=4, column=1, sticky="w")
 
-    lbl_contagem = ttk.Label(top, text="Nenhum transporte informado.", foreground="gray")
-    lbl_contagem.grid(row=3, column=1, sticky="w", pady=(4, 0))
+    lbl_contagem_expedicao = ttk.Label(top, text="Nenhum transporte informado.", foreground="gray")
+    lbl_contagem_expedicao.grid(row=5, column=1, sticky="w", pady=(4, 0))
 
-    botoes = ttk.Frame(top)
-    botoes.grid(row=4, column=1, sticky="w", pady=(8, 0))
-    btn_atualizar = ttk.Button(botoes, text="Atualizar WMS", width=22)
-    btn_atualizar.grid(row=0, column=0, padx=(0, 8))
-    btn_limpar = ttk.Button(botoes, text="Limpar", width=12)
-    btn_limpar.grid(row=0, column=1)
+    botoes_expedicao = ttk.Frame(top)
+    botoes_expedicao.grid(row=6, column=1, sticky="w", pady=(8, 0))
+    btn_zsd106 = ttk.Button(botoes_expedicao, text="Rodar ZSD106", width=16)
+    btn_zsd106.grid(row=0, column=0, padx=(0, 8))
+    btn_vt12 = ttk.Button(botoes_expedicao, text="Rodar VT12", width=16)
+    btn_vt12.grid(row=0, column=1, padx=(0, 8))
+    btn_zv74 = ttk.Button(botoes_expedicao, text="Rodar ZV74", width=16)
+    btn_zv74.grid(row=0, column=2)
+
+    ttk.Separator(top, orient="horizontal").grid(row=7, column=0, columnspan=2, sticky="ew", pady=(16, 8))
+    ttk.Label(top, text="Recebimento", font=("", 10, "bold")).grid(row=8, column=1, sticky="w")
+    ttk.Label(top, text="Cole aqui os transportes copiados do Excel (um por linha):").grid(
+        row=9, column=1, sticky="w", pady=(4, 2)
+    )
+    entrada_recebimento = ScrolledText(top, width=40, height=6)
+    entrada_recebimento.grid(row=10, column=1, sticky="w")
+
+    botoes_recebimento = ttk.Frame(top)
+    botoes_recebimento.grid(row=11, column=1, sticky="w", pady=(8, 0))
+    btn_zsd16 = ttk.Button(botoes_recebimento, text="Rodar ZSD16 (em breve)", width=22)
+    btn_zsd16.grid(row=0, column=0)
+    btn_zsd16.state(["disabled"])
 
     txt = ScrolledText(root, width=110, height=20)
     txt.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
@@ -681,61 +635,151 @@ def criar_gui(usuario: dict):
     root.rowconfigure(1, weight=1)
 
     def atualizar_contagem(event=None):
-        validos, invalidos = parse_transportes(entrada.get("1.0", "end"))
+        validos, invalidos = parse_transportes(entrada_expedicao.get("1.0", "end"))
         if not validos and not invalidos:
-            lbl_contagem.config(text="Nenhum transporte informado.", foreground="gray")
+            lbl_contagem_expedicao.config(text="Nenhum transporte informado.", foreground="gray")
         else:
             aviso = f"  |  {len(invalidos)} inválido(s) serão ignorados" if invalidos else ""
-            lbl_contagem.config(
+            lbl_contagem_expedicao.config(
                 text=f"{len(validos)} transporte(s) válido(s){aviso}",
                 foreground="red" if invalidos else "green",
             )
 
-    def limpar():
-        entrada.delete("1.0", "end")
-        atualizar_contagem()
-
-    def executar():
-        validos, invalidos = parse_transportes(entrada.get("1.0", "end"))
+    def executar_zsd106_gui():
+        validos, invalidos = parse_transportes(entrada_expedicao.get("1.0", "end"))
         if not validos:
             messagebox.showwarning("Atenção", "Cole ao menos um transporte válido (somente dígitos).")
             return
-        if invalidos:
-            amostra = ", ".join(invalidos[:5]) + ("..." if len(invalidos) > 5 else "")
-            if not messagebox.askyesno(
-                "Valores inválidos", f"{len(invalidos)} valor(es) serão ignorados ({amostra}).\nContinuar com os {len(validos)} válidos?"
-            ):
-                return
-        btn_atualizar.state(["disabled"])
-        btn_limpar.state(["disabled"])
+        btn_zsd106.state(["disabled"])
 
         def trabalho():
             _com_init()
             try:
-                print("=====================================\n   Hawk Tech WMS - Atualizar WMS (Arcelor)\n=====================================")
-                if invalidos:
-                    print(f"⚠️ Ignorados (inválidos): {', '.join(invalidos)}")
-                if fluxo_atualizar_wms(validos):
-                    print("\n✓ Atualização concluída.\n")
-                else:
-                    print("\n✗ Atualização NÃO concluída — veja o erro acima.\n")
+                print("===== Rodando ZSD106 =====")
+                session = authenticate_sap()
+                if not session:
+                    print("❌ Falha ao conectar no SAP.")
+                    return
+                filepath = executar_zsd106(session, validos)
+                if not filepath:
+                    print("❌ Export ZSD106 falhou. Abortando.")
+                    return
+                df = ler_planilha(filepath)
+                from zsd106_parser import parse_zsd106
+                from zsd106_writer import gravar_zsd106
+
+                transportes, linhas_invalidas = parse_zsd106(df.to_dict("records"), list(df.columns))
+                for aviso in linhas_invalidas:
+                    print(f"⚠️ {aviso}")
+                resumo = gravar_zsd106(_supabase, transportes, _usuario_logado.get("id"))
+                print(f"✓ ZSD106: {resumo}")
             except Exception as e:
-                print(f"\n[ERRO] Atualizar WMS: {e}\n")
+                print(f"\n[ERRO] Rodar ZSD106: {e}\n")
             finally:
                 _com_uninit()
-                root.after(0, lambda: (btn_atualizar.state(["!disabled"]), btn_limpar.state(["!disabled"])))
+                root.after(0, lambda: btn_zsd106.state(["!disabled"]))
 
         threading.Thread(target=trabalho, daemon=True).start()
 
-    entrada.bind("<KeyRelease>", atualizar_contagem)
-    entrada.bind("<<Paste>>", lambda e: root.after(50, atualizar_contagem))
-    btn_atualizar.configure(command=executar)
-    btn_limpar.configure(command=limpar)
+    def executar_vt12_gui():
+        validos, invalidos = parse_transportes(entrada_expedicao.get("1.0", "end"))
+        if not validos:
+            messagebox.showwarning("Atenção", "Cole ao menos um transporte válido (somente dígitos).")
+            return
+        btn_vt12.state(["disabled"])
+
+        def trabalho():
+            _com_init()
+            try:
+                print("===== Rodando VT12 =====")
+                session = authenticate_sap()
+                if not session:
+                    print("❌ Falha ao conectar no SAP.")
+                    return
+                filepath = executar_vt12(session, validos)
+                if not filepath:
+                    print("❌ Export VT12 falhou. Abortando.")
+                    return
+                from vt12_parser import ler_linhas_vt12, parse_vt12
+                from vt12_writer import gravar_vt12
+
+                transportes, linhas_invalidas = parse_vt12(ler_linhas_vt12(filepath))
+                for aviso in linhas_invalidas:
+                    print(f"⚠️ {aviso}")
+                resumo = gravar_vt12(_supabase, transportes)
+                print(f"✓ VT12: {resumo}")
+            except Exception as e:
+                print(f"\n[ERRO] Rodar VT12: {e}\n")
+            finally:
+                _com_uninit()
+                root.after(0, lambda: btn_vt12.state(["!disabled"]))
+
+        threading.Thread(target=trabalho, daemon=True).start()
+
+    NOME_ARQ_ZV74 = "zv74.xlsx"
+
+    def executar_zv74_gui():
+        btn_zv74.state(["disabled"])
+
+        def trabalho():
+            try:
+                print("===== Rodando ZV74 =====")
+                filepath = os.path.join(PASTA_EXPORT, NOME_ARQ_ZV74)
+                if not os.path.exists(filepath):
+                    print(
+                        f"⚠️ Ainda não existe automação SAP pro ZV74 (ver CLAUDE.md do rpa_arcelor). "
+                        f"Exporte manualmente o ZV74 para {filepath} e rode de novo."
+                    )
+                    return
+                import openpyxl
+                from zv74_parser import parse_zv74
+                from zv74_writer import gravar_zv74
+
+                wb = openpyxl.load_workbook(filepath, data_only=True)
+                linhas = list(wb.active.iter_rows(values_only=True))
+                resultado = parse_zv74(linhas)
+                resumo = gravar_zv74(_supabase, resultado, _usuario_logado.get("id"))
+                print(f"✓ ZV74: {resumo}")
+            except Exception as e:
+                print(f"\n[ERRO] Rodar ZV74: {e}\n")
+            finally:
+                root.after(0, lambda: btn_zv74.state(["!disabled"]))
+
+        threading.Thread(target=trabalho, daemon=True).start()
+
+    entrada_expedicao.bind("<KeyRelease>", atualizar_contagem)
+    entrada_expedicao.bind("<<Paste>>", lambda e: root.after(50, atualizar_contagem))
+    btn_zsd106.configure(command=executar_zsd106_gui)
+    btn_vt12.configure(command=executar_vt12_gui)
+    btn_zv74.configure(command=executar_zv74_gui)
 
     root.mainloop()
 
 
+def _mostrar_erro_fatal(mensagem: str) -> None:
+    """Mostra um erro numa janela mesmo antes de a GUI principal existir
+    (a GUI só redireciona stdout/stderr depois de aberta)."""
+    root = tk.Tk()
+    root.withdraw()
+    messagebox.showerror("Hawk Tech WMS — Arcelor Mittal", mensagem)
+    root.destroy()
+
+
 if __name__ == "__main__":
-    usuario = criar_tela_login()
+    from auth_servico import carregar_credenciais_servico
+
+    try:
+        credenciais = carregar_credenciais_servico(resource_path("credenciais_servico.json"))
+        usuario = autenticar_usuario(credenciais["email"], credenciais["senha"])
+    except (FileNotFoundError, ValueError) as e:
+        usuario = None
+        _mostrar_erro_fatal(str(e))
+    else:
+        if not usuario:
+            _mostrar_erro_fatal(
+                "Falha ao autenticar a conta de serviço do robô. "
+                "Verifique credenciais_servico.json (e-mail/senha, e se a role 'conferente' está atribuída)."
+            )
+
     if usuario:
         criar_gui(usuario)
