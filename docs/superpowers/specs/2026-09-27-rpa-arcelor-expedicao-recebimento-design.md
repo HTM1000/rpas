@@ -89,6 +89,23 @@ existe.** Pedido explícito do usuário, confirmado após consultar o comportame
 atual: se nada daquele item ainda foi separado no depósito, marca `deleted_at`
 (equivale ao delete de hoje); se já tem material em pré-picking, mantém visível e
 zera a quantidade, sem `deleted_at` — não esconde um problema de estoque já separado.
+A checagem de pré-picking é refeita bem na hora de gravar (não só antes), porque a
+Separação pode ter avançado enquanto o robô rodava — mesmo cuidado que
+`ImportarTransportesButton.tsx` já tem.
+
+**Sem checagem de saldo de estoque (decisão do usuário, 27/09/2026).** A importação
+manual tem uma etapa (`alocarSaldo`/`buscarDisponivelExpedicao`) que reduz a
+quantidade pedida quando não há saldo disponível, com uma prévia pro humano
+confirmar antes de gravar. O robô NÃO replica isso na v1: grava o peso do ZSD106
+direto, sem checar/reduzir por saldo — mantém o robô mais simples e previsível, sem
+gravar silenciosamente menos do que o SAP informou (sem humano ali pra confirmar a
+redução). Falta de saldo aparece depois na Separação/Conferência, como já acontece
+com o cadastro manual avulso (`NovoTransportePage.tsx`), que também não checa saldo.
+
+**Só mexe em transportes com status `agendado` ou `em_andamento`.** Igual à
+importação manual (`statusElegivelParaNovosItens`): transporte já `finalizado` ou
+`descumprido` não recebe item novo nem tem item removido pelo robô — uma
+reconsulta do ZSD106 não deve reabrir ou alterar um transporte encerrado.
 
 ## Arquitetura / componentes
 
@@ -121,23 +138,38 @@ ID MA Transporte | Lote | Quantidade | Qtde | Nota Fiscal | Nome`.
 
 Por transporte (`N° Transporte`, sem zero à esquerda):
 - `transportes`: upsert por `numero_transporte` — `tipo='expedicao'`,
-  `status='agendado'`, `hora_agenda=null`. NÃO sobrescrever campos que o operador
-  edita (`placa_confirmada`, campos de encerramento, etc.) — só os campos que o ZSD106
-  realmente informa.
-- Por item (`Material` = sku, sem zero à esquerda):
-  - `peso = Quantidade`, `unidade = Qtde`.
-  - Se `peso == unidade`: `transporte_itens.quantidade_pedido = peso`,
+  `status='agendado'`, `hora_agenda=null`, `placa=null`, `origem=null`,
+  `transportadora=null`, `notas_fiscais=null`, `fornecimentos` = lista dos
+  fornecimentos únicos do transporte (mesmo campo que a importação manual já
+  preenche). NÃO sobrescrever campos que o operador edita (`placa_confirmada`,
+  campos de encerramento, etc.). Só mexe no transporte se ele não existir ainda OU
+  se já existir com status `agendado`/`em_andamento` — nunca em `finalizado`/
+  `descumprido` (igual `statusElegivelParaNovosItens` da importação manual).
+- Linhas do arquivo são agrupadas por transporte e depois por
+  **(`Material` sem zero à esquerda e maiúsculo, forma de separar)** — o mesmo
+  material em fornecimentos diferentes do mesmo transporte vira UM item só, com as
+  quantidades somadas; o mesmo material aparecendo uma vez por peso e outra vez por
+  unidade (`Quantidade ≠ Qtde`) vira DOIS itens distintos. Isso espelha
+  `agendaExpedicaoParser.ts` linha por linha, inclusive a soma sem cauda de ponto
+  flutuante (arredondar pra grama: `round(valor*1000)/1000`).
+  - `peso = soma de Quantidade` (das linhas daquele item), `unidade = soma de Qtde`
+    (só quando o item separa por unidade).
+  - Se as somas de peso e unidade batem: `transporte_itens.quantidade_pedido = peso`,
     `unidades_pedido = null`, `separa_por_unidade = false`.
-  - Se `peso != unidade`: `quantidade_pedido = peso`, `unidades_pedido = unidade`,
+  - Se não batem: `quantidade_pedido = peso`, `unidades_pedido = unidade`,
     `separa_por_unidade = true`.
-  - Reconciliação contra o que já está gravado para esse transporte:
-    - igual → não mexe.
+  - Reconciliação contra o que já está gravado para esse transporte (chave =
+    sku + forma de separar):
+    - igual (peso e unidade dentro da tolerância de meia grama) → não mexe.
     - diferente (pra mais ou pra menos) → `update`.
     - não existe ainda → `insert`.
     - existia e sumiu do arquivo → ver regra de `deleted_at` acima.
   - `arc_item_ordem_venda`: uma linha por quebra de `Fornecimento`/`Doc. Modelo`
-    (= ordem de venda), ambos sem zero à esquerda, `quantidade_kg`, `unidades`,
-    `ordem` = posição de aparição na planilha.
+    (= ordem de venda) DENTRO do item — linhas do mesmo fornecimento+ordem entram
+    somadas —, ambos sem zero à esquerda (decisão deste projeto, ver acima),
+    `quantidade_kg`, `unidades`, `ordem` = posição de aparição na planilha. Uma
+    reimportação REESCREVE essa quebra inteira (apaga as antigas do item e insere as
+    novas), igual à importação manual.
 
 ### VT12 (expedição, sequência de carregamento) — `arc_transporte_fornecimento`
 
@@ -198,10 +230,17 @@ Fora de escopo. Botão existe na tela, desabilitado, texto "em breve".
 - Migration nova em `wmsarcelormital/supabase/migrations/`:
   `ALTER TABLE public.transporte_itens ADD COLUMN deleted_at timestamptz;`
 - Todo ponto do front que lê `transporte_itens` (via `arc('transporte_itens')` ou
-  `.from('transporte_itens')`) precisa do filtro `.is('deleted_at', null)`. O
-  levantamento completo desses pontos fica para o plano de implementação (não foi
-  enumerado agora) — é um passo obrigatório antes de ativar a gravação real, senão
-  itens "excluídos" pelo robô continuam aparecendo pro operador.
+  `.from('transporte_itens')`) precisa do filtro `.is('deleted_at', null)`. Já
+  levantei via grep: são **28 pontos** espalhados em páginas centrais (Agenda,
+  Conferência de Expedição/Recebimento, Dashboard, Otimização, Produtividade de
+  Equipes, Separação por Item, `ImportarTransportesButton.tsx` etc.) — grande
+  demais e arriscado demais (app de produção, ao vivo) pra virar uma tarefa dentro
+  deste plano. Fica pra um **Plano 2, separado**, feito depois deste (decisão do
+  usuário, 27/09/2026): este plano (Plano 1) só cria a coluna e faz o robô
+  escrever nela; o front continua sem filtrar por enquanto, então itens marcados
+  `deleted_at` pelo robô ainda aparecerão na tela até o Plano 2 rodar. Isso é
+  aceitável pro Plano 1 porque a gravação do robô também segue em modo simulação
+  até validar contra SAP real (ver "Erros e modo de teste").
 - RLS de UPDATE em `transporte_itens` já cobre a role `conferente` — a conta de
   serviço do robô não precisa de policy nova, só precisa ter essa role atribuída em
   `user_roles`.
