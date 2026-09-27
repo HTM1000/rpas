@@ -3,6 +3,7 @@
 # ==========================================
 CredenciaisOracle.json
 token.json
+credenciais_servico.json
 
 # Workspace de scratch do superpowers (ledgers/briefs/reviews de execução de planos)
 .superpowers/
