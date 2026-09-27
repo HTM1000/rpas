@@ -30,7 +30,7 @@ def _buscar_existentes(cliente, numeros_transporte):
     if ids:
         resp_itens = (
             cliente.table("transporte_itens")
-            .select("id, transporte_id, sku, separa_por_unidade, quantidade_pedido, unidades_pedido")
+            .select("id, transporte_id, sku, separa_por_unidade, quantidade_pedido, unidades_pedido, deleted_at")
             .in_("transporte_id", ids)
             .execute()
         )
@@ -178,12 +178,17 @@ def gravar_zsd106(cliente, transportes: list, usuario_id) -> dict:
 
             item_id = atual["id"]
             mesmo_peso = pesos_iguais(atual["quantidade_pedido"], item["quantidade"])
-            mesmas_unidades = (atual.get("unidades_pedido") or 0) == (item["unidades"] or 0)
-            if mesmo_peso and mesmas_unidades:
-                continue  # igual ao que já está gravado: não mexe (nem na quebra por ordem)
+            mesmas_unidades = pesos_iguais(atual.get("unidades_pedido") or 0, item["unidades"] or 0)
+            estava_apagado = atual.get("deleted_at") is not None
+            if mesmo_peso and mesmas_unidades and not estava_apagado:
+                continue  # igual ao que já está gravado e não estava apagado: não mexe (nem na quebra por ordem)
 
             cliente.table("transporte_itens").update(
-                {"quantidade_pedido": item["quantidade"], "unidades_pedido": item["unidades"]}
+                {
+                    "quantidade_pedido": item["quantidade"],
+                    "unidades_pedido": item["unidades"],
+                    "deleted_at": None,
+                }
             ).eq("id", item_id).execute()
             resumo["atualizados"] += 1
             _regravar_ordens(cliente, item_id, item["ordens"])
@@ -203,11 +208,17 @@ def gravar_zsd106(cliente, transportes: list, usuario_id) -> dict:
                         "unidades_pedido": 0 if item_gravado["separa_por_unidade"] else None,
                     }
                 ).eq("id", item_gravado["id"]).execute()
+                cliente.table("arc_item_ordem_venda").delete().eq(
+                    "transporte_item_id", item_gravado["id"]
+                ).execute()
                 resumo["zerados"] += 1
             else:
                 cliente.table("transporte_itens").update(
                     {"deleted_at": datetime.now(timezone.utc).isoformat()}
                 ).eq("id", item_gravado["id"]).execute()
+                cliente.table("arc_item_ordem_venda").delete().eq(
+                    "transporte_item_id", item_gravado["id"]
+                ).execute()
                 resumo["excluidos"] += 1
 
     return resumo

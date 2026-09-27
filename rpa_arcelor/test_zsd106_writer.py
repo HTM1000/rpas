@@ -95,6 +95,10 @@ class TestGravarZsd106(unittest.TestCase):
         self.assertEqual(resumo["zerados"], 0)
         atualizacoes = [c for c in cliente.chamadas if c["tabela"] == "transporte_itens" and c["operacao"] == "update"]
         self.assertIn("deleted_at", atualizacoes[0]["payload"])
+        # Item excluído não pode deixar rastro de ordem de venda ativo.
+        ordens_apagadas = [c for c in cliente.chamadas if c["tabela"] == "arc_item_ordem_venda" and c["operacao"] == "delete"]
+        self.assertEqual(len(ordens_apagadas), 1)
+        self.assertIn(("eq", "transporte_item_id", "I1"), ordens_apagadas[0]["filtros"])
 
     def test_item_sumido_com_pre_picking_zera_sem_deleted_at(self):
         transporte_sem_item = {**TRANSPORTE_NOVO, "itens": []}
@@ -120,6 +124,63 @@ class TestGravarZsd106(unittest.TestCase):
         payload = atualizacoes[0]["payload"]
         self.assertEqual(payload["quantidade_pedido"], 0)
         self.assertNotIn("deleted_at", payload)
+        # Item zerado também não pode deixar rastro de ordem de venda ativo.
+        ordens_apagadas = [c for c in cliente.chamadas if c["tabela"] == "arc_item_ordem_venda" and c["operacao"] == "delete"]
+        self.assertEqual(len(ordens_apagadas), 1)
+        self.assertIn(("eq", "transporte_item_id", "I1"), ordens_apagadas[0]["filtros"])
+
+    def test_item_reaparece_apagado_limpa_deleted_at(self):
+        # Item foi soft-deleted numa importação anterior (deleted_at setado) e
+        # reaparece com a MESMA quantidade: antes da correção, o early-continue
+        # de "igual ao que já está gravado" deixava o deleted_at preso pra sempre.
+        cliente = FakeSupabaseClient(
+            respostas={
+                "transportes": {"select": [{"id": "T1", "numero_transporte": "5100130964", "status": "agendado"}]},
+                "transporte_itens": {
+                    "select": [
+                        {"id": "I1", "transporte_id": "T1", "sku": "128046", "separa_por_unidade": False,
+                         "quantidade_pedido": 10.0, "unidades_pedido": None,
+                         "deleted_at": "2026-01-01T00:00:00+00:00"}
+                    ]
+                },
+                "movimentacao_armazenagem": {"select": []},
+            }
+        )
+        resumo = gravar_zsd106(cliente, [TRANSPORTE_NOVO], usuario_id="U1")
+
+        self.assertEqual(resumo["atualizados"], 1)
+        atualizacoes_item = [c for c in cliente.chamadas if c["tabela"] == "transporte_itens" and c["operacao"] == "update"]
+        self.assertEqual(len(atualizacoes_item), 1)
+        self.assertIsNone(atualizacoes_item[0]["payload"]["deleted_at"])
+
+    def test_item_por_unidade_com_drift_de_ponto_flutuante_nao_atualiza(self):
+        # unidades é float somado/arredondado igual quantidade (peso) — precisa
+        # da mesma tolerância de pesos_iguais, não de "==" exato.
+        transporte_por_unidade = {
+            **TRANSPORTE_NOVO,
+            "itens": [
+                {"sku": "128046", "quantidade": 10.0, "por_unidade": True, "unidades": 70.0, "ordens": [
+                    {"fornecimento": "861886474", "ordem_venda": "", "quantidade": 10.0, "unidades": 70.0}
+                ]},
+            ],
+        }
+        cliente = FakeSupabaseClient(
+            respostas={
+                "transportes": {"select": [{"id": "T1", "numero_transporte": "5100130964", "status": "agendado"}]},
+                "transporte_itens": {
+                    "select": [
+                        {"id": "I1", "transporte_id": "T1", "sku": "128046", "separa_por_unidade": True,
+                         "quantidade_pedido": 10.0, "unidades_pedido": 70.0004, "deleted_at": None}
+                    ]
+                },
+                "movimentacao_armazenagem": {"select": []},
+            }
+        )
+        resumo = gravar_zsd106(cliente, [transporte_por_unidade], usuario_id="U1")
+
+        self.assertEqual(resumo, {"inseridos": 0, "atualizados": 0, "excluidos": 0, "zerados": 0})
+        atualizacoes_item = [c for c in cliente.chamadas if c["tabela"] == "transporte_itens" and c["operacao"] == "update"]
+        self.assertEqual(atualizacoes_item, [])
 
     def test_transporte_finalizado_nao_e_mexido(self):
         cliente = FakeSupabaseClient(
