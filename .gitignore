@@ -1,7 +1,7 @@
 # ==========================================
 # Arquivos personalizados
 # ==========================================
-CredenciaisOracle.json
+Credenciais*.json
 token.json
 credenciais_servico.json
 
@@ -55,7 +55,9 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 dist/
+dist_onefile/
 build/
+build_onefile/
 .next/
 out/
 .cache/
